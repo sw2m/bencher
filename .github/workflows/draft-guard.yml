@@ -1,0 +1,29 @@
+name: draft-guard
+
+# Open PRs as drafts: a PR opened ready-for-review is converted back to draft, so
+# CI doesn't fire on work-in-progress. The author marks it ready when done.
+on:
+  pull_request:
+    types:
+      - opened
+
+permissions:
+  pull-requests: write
+
+jobs:
+  to-draft:
+    # only a non-draft open, and only same-repo (the token can't convert fork PRs)
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: convert to draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh pr ready "$PR" --repo "$REPO" --undo
+          gh pr comment "$PR" --repo "$REPO" --body \
+            "Auto-converted to **draft** — open PRs as drafts; CI runs when you mark it **Ready for review**. (Prevents premature CI on work-in-progress.)"

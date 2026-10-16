@@ -1,0 +1,21 @@
+name: ci
+
+on:
+  pull_request:
+    # No `opened`: a non-draft open would race draft-guard and fire CI once before
+    # it re-drafts. CI runs when a draft is marked ready (ready_for_review) or on a
+    # push (synchronize).
+    types:
+      - synchronize
+      - reopened
+      - ready_for_review
+
+permissions:
+  contents: read
+
+jobs:
+  # The one status to mark required; stubbed until the runner's checks land
+  mergeable:
+    runs-on: ubuntu-latest
+    steps:
+      - run: "true"
