@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 import shutil
 from importlib import resources
 from pathlib import Path
 from typing import Any
 
+import pydantic_core
 import yaml
 
 from bencher.contract.input.bench import Bench
@@ -33,8 +33,8 @@ class Share:
             else:
                 shutil.copy2(source, target)
             artifacts[name] = f"{local}/in/artifacts/{name}"
-        (inputs / "params.json").write_text(json.dumps(bench.params) + "\n")
-        (inputs / "pins.json").write_text(json.dumps(bench.pins) + "\n")
+        (inputs / "params.json").write_bytes(pydantic_core.to_json(bench.params) + b"\n")
+        (inputs / "pins.json").write_bytes(pydantic_core.to_json(bench.pins) + b"\n")
         milliseconds = int(bench.telemetry.interval.total_seconds() * 1000)
         pillar: dict[str, Any] = {
             "bencher": {
