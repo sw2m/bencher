@@ -1,0 +1,49 @@
+# see README "Ownership": everything bencher owns is pinned here, by upstream-published digest
+
+[[component]]
+name = "salt"
+os = "linux"
+arch = "x86_64"
+url = "https://github.com/saltstack/salt/releases/download/v3008.3/salt-3008.3-onedir-linux-x86_64.tar.xz"
+digest = "sha512:68cead550cbdb606cbe1204c6ac7ca4428c72eb8bc18fc7d7d9c16c51db26a1b3c1a237cf9c1ad63d8d4528a794afd6e2a31738ae49d075e279bf1044d54f753"
+member = "salt"
+
+[[component]]
+name = "salt"
+os = "linux"
+arch = "aarch64"
+url = "https://github.com/saltstack/salt/releases/download/v3008.3/salt-3008.3-onedir-linux-arm64.tar.xz"
+digest = "sha512:89f78555f488b05ef65c6cbf1a27119ee86d9aa71ab0682b73c3dd8def14190e5908e2ccd435e2ceee4e3b751cfd7b76ba2eeea34e5e97240c6e0cf34e33b4a5"
+member = "salt"
+
+[[component]]
+name = "telegraf"
+os = "linux"
+arch = "x86_64"
+url = "https://dl.influxdata.com/telegraf/releases/telegraf-1.40.2_linux_amd64.tar.gz"
+digest = "sha256:fcdc579a09227fa3e2e3e208d3cf75cfd03d42ae141a4b23b18659a94428bfa3"
+member = "telegraf-1.40.2/usr/bin/telegraf"
+
+[[component]]
+name = "telegraf"
+os = "linux"
+arch = "aarch64"
+url = "https://dl.influxdata.com/telegraf/releases/telegraf-1.40.2_linux_arm64.tar.gz"
+digest = "sha256:8794daf6ce0bd49fa42c3f2d1515608ed14689e0efbc7b3391bf39ed7d112dcc"
+member = "telegraf-1.40.2/usr/bin/telegraf"
+
+[[component]]
+name = "victoria"
+os = "linux"
+arch = "x86_64"
+url = "https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v1.154.0/victoria-metrics-linux-amd64-v1.154.0.tar.gz"
+digest = "sha256:2ba3edae969a4b52a55e78d2721067541b0ee94774190dbd87fea0602aa57b8f"
+member = "victoria-metrics-prod"
+
+[[component]]
+name = "victoria"
+os = "linux"
+arch = "aarch64"
+url = "https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v1.154.0/victoria-metrics-linux-arm64-v1.154.0.tar.gz"
+digest = "sha256:6dbeb72f924007ebb9abadfd8a555a420950af13631bb32143c5f4e5010dec2d"
+member = "victoria-metrics-prod"

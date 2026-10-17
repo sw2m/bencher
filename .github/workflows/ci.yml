@@ -4,7 +4,7 @@ on:
   pull_request:
     # No `opened`: a non-draft open would race draft-guard and fire CI once before
     # it re-drafts. CI runs when a draft is marked ready (ready_for_review) or on a
-    # push (synchronize).
+    # push (synchronize). Drafts are skipped below regardless.
     types:
       - synchronize
       - reopened
@@ -14,8 +14,25 @@ permissions:
   contents: read
 
 jobs:
-  # The one status to mark required; stubbed until the runner's checks land
-  mergeable:
+  check:
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
-      - run: "true"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+      - run: nix flake check --no-update-lock-file -L
+
+  # The one status to mark required
+  mergeable:
+    needs:
+      - check
+    if: always() # report on drafts too, so the status is never stuck "expected"
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "check=${{ needs.check.result }}"
+          [ "${{ needs.check.result }}" = success ]

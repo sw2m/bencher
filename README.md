@@ -97,6 +97,11 @@ Both run inside the runner, in `bencher.slice`, pinned by bencher:
   `nstat`, `kernel` and `system`, tagged `reporter=system`. It also listens for pushed metrics.
 - **VictoriaMetrics** stores, on local disk, and isolates every series by its `reporter` label.
 
+Per-reporter telemetry is exact in both instance types. System-wide counters are what the guest
+can see: a VM sees only itself, while a container sees what Incus's lxcfs virtualizes and the
+host's view of the rest (disks in particular). Use a VM when system-wide numbers must be the
+runner's alone.
+
 **Reporters** are the isolation unit. A runner declares them in `runner.toml`; bencher writes a
 `procstat` filter per reporter that matches the PID in `$BENCHER_REPORTERS/<name>.pid` and all
 of its children. The entrypoint writes that file when it starts the reporter. Pushed metrics

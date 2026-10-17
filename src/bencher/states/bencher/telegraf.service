@@ -1,0 +1,7 @@
+[Unit]
+Description=bencher telemetry collector
+
+[Service]
+Slice=bencher.slice
+ExecStart=/var/lib/bencher/bin/telegraf --config /var/lib/bencher/telegraf.conf
+TimeoutStopSec=60

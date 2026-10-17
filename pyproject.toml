@@ -1,0 +1,39 @@
+[project]
+name = "bencher"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "pyincusd>=7.5.1",
+  "pydantic>=2",
+]
+
+[project.scripts]
+bencher = "bencher.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+bencher = ["payload.toml", "guest/linux/*", "states/bencher/*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["RUF012"] # pydantic copies field defaults per instance
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+mypy_path = "src"
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["pyincusd.*"]
+follow_untyped_imports = true
