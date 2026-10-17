@@ -1,6 +1,0 @@
-[Unit]
-Description=bencher telemetry store
-
-[Service]
-Slice=bencher.slice
-ExecStart=/var/lib/bencher/bin/victoria -storageDataPath=/var/lib/bencher/victoria -httpListenAddr=127.0.0.1:8428 -retentionPeriod=1d -loggerLevel=WARN

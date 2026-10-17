@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import contextlib
 import json
-import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +12,7 @@ from pyincusd.api.operations_api import OperationsApi
 from pyincusd.exceptions import ApiException
 from pyincusd.local import Client
 from pyincusd.models.instance_exec_post import InstanceExecPost
+from pyincusd.models.instance_put import InstancePut
 from pyincusd.models.instance_source import InstanceSource
 from pyincusd.models.instance_state_put import InstanceStatePut
 from pyincusd.models.instances_post import InstancesPost
@@ -26,6 +27,7 @@ remotes = {
     "images": "https://images.linuxcontainers.org",
     "ubuntu": "https://cloud-images.ubuntu.com/releases",
 }
+kinds = {"container": "container", "vm": "virtual-machine"}
 
 
 def socket(chosen: str | None) -> str:
@@ -39,15 +41,13 @@ def socket(chosen: str | None) -> str:
 
 def source(image: str) -> InstanceSource:
     remote, sep, alias = image.partition(":")
-    if sep and remote in remotes:
-        return InstanceSource(
-            type="image", alias=alias, server=remotes[remote], protocol="simplestreams"
-        )
-    if sep:
+    if not sep:
+        return InstanceSource(type="image", alias=image)
+    if remote not in remotes:
         raise ValueError(f"unknown image remote {remote!r}; known: {', '.join(remotes)}")
-    if re.fullmatch(r"[0-9a-f]{12,64}", image):
-        return InstanceSource(type="image", fingerprint=image)
-    return InstanceSource(type="image", alias=image)
+    return InstanceSource(
+        type="image", alias=alias, server=remotes[remote], protocol="simplestreams"
+    )
 
 
 @dataclass(frozen=True)
@@ -61,13 +61,9 @@ class Failure(Exception):
     pass
 
 
-kinds = {"container": "container", "vm": "virtual-machine"}
-
-
 def reason(error: ApiException) -> str:
     try:
-        body = json.loads(error.body or "")
-        return f"Incus: {body['error']}"
+        return f"Incus: {json.loads(error.body or '')['error']}"
     except (ValueError, KeyError, TypeError):
         return f"Incus: HTTP {error.status} {error.reason}"
 
@@ -114,7 +110,7 @@ class Incus:
         request = InstancesPost(
             name=name,
             type=kinds[kind],
-            start=True,
+            start=False,
             source=source(image),
             config=config,
             devices=devices,
@@ -122,6 +118,44 @@ class Incus:
         )
         try:
             response = await self.instances.instances_post(instance=request)
+        except ApiException as error:
+            raise Failure(reason(error)) from None
+        await self.wait(response.operation, timeout)
+
+    async def config(self, name: str) -> dict[str, str]:
+        try:
+            response = await self.instances.instance_get(name)
+        except ApiException as error:
+            raise Failure(reason(error)) from None
+        if response.metadata is None:
+            raise Failure(f"instance {name} has no metadata")
+        return {k: str(v) for k, v in (response.metadata.config or {}).items()}
+
+    async def configure(self, name: str, config: dict[str, str]) -> None:
+        try:
+            await self.instances.instance_patch(name, instance=InstancePut(config=config))
+        except ApiException as error:
+            raise Failure(reason(error)) from None
+
+    async def address(self, name: str) -> str:
+        try:
+            response = await self.instances.instance_state_get(name)
+        except ApiException as error:
+            raise Failure(reason(error)) from None
+        network = (response.metadata.network if response.metadata else None) or {}
+        for interface, state in network.items():
+            if interface == "lo" or state.addresses is None:
+                continue
+            for entry in state.addresses:
+                if entry.family == "inet" and entry.scope == "global" and entry.address:
+                    return entry.address
+        raise Failure(f"instance {name} has no global IPv4 address")
+
+    async def state(self, name: str, action: str, timeout: float) -> None:
+        try:
+            response = await self.instances.instance_state_put(
+                name, state=InstanceStatePut(action=action, force=action == "stop")
+            )
         except ApiException as error:
             raise Failure(reason(error)) from None
         await self.wait(response.operation, timeout)
@@ -151,13 +185,8 @@ class Incus:
         return Exec(int(meta.get("return", -1)), streams.get("1", b""), streams.get("2", b""))
 
     async def delete(self, name: str) -> None:
-        try:
-            stop = await self.instances.instance_state_put(
-                name, state=InstanceStatePut(action="stop", force=True)
-            )
-            await self.wait(stop.operation, 120)
-        except (ApiException, Failure):
-            pass
+        with contextlib.suppress(Failure):
+            await self.state(name, "stop", 120)
         try:
             response = await self.instances.instance_delete(name)
         except ApiException as error:

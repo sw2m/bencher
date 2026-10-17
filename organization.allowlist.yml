@@ -1,0 +1,16 @@
+symbols:
+  model_config:
+    - "src/bencher/contract/__init__.py"
+    - "src/bencher/host/settings.py"
+  settings_customise_sources:
+    - "src/bencher/host/settings.py"
+  settings_cls:
+    - "src/bencher/host/settings.py"
+  init_settings:
+    - "src/bencher/host/settings.py"
+  env_settings:
+    - "src/bencher/host/settings.py"
+  dotenv_settings:
+    - "src/bencher/host/settings.py"
+  file_secret_settings:
+    - "src/bencher/host/settings.py"

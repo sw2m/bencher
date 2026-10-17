@@ -5,18 +5,20 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from typing import Any
 
 from pydantic import BaseModel
 
-from bencher import payload
-from bencher.bench import Bench, override
+from bencher import run as lifecycle
+from bencher.contract import explain
+from bencher.contract.bench import Bench
+from bencher.contract.override import Override
+from bencher.contract.report import Report
+from bencher.contract.result import Result
+from bencher.contract.runner import Runner
 from bencher.expect import Rules
-from bencher.model import explain
-from bencher.result import Report, Result
-from bencher.run import Plan, Run, arch
-from bencher.runner import Runner
-from bencher.settings import Settings
+from bencher.host.cloud import Target, targets
+from bencher.host.settings import Settings
+from bencher.run.plan import Plan
 
 schemas: dict[str, type[BaseModel]] = {
     "bench": Bench,
@@ -31,13 +33,13 @@ def settings(args: argparse.Namespace) -> Settings:
     return Settings.layered(flags)
 
 
-def overrides(args: argparse.Namespace) -> dict[str, Any]:
-    return dict(override(text) for text in args.set)
+def overrides(args: argparse.Namespace) -> list[Override]:
+    return [Override.parse(text) for text in args.set]
 
 
 def run(args: argparse.Namespace) -> int:
     chosen = settings(args)
-    report = asyncio.run(Run(args.dir, chosen, overrides(args)).start())
+    report = asyncio.run(lifecycle.start(args.dir, chosen, overrides(args)))
     text = report.dump()
     if chosen.out:
         chosen.out.write_text(text)
@@ -48,12 +50,8 @@ def run(args: argparse.Namespace) -> int:
 
 def validate(args: argparse.Namespace) -> int:
     plan = Plan.load(args.dir.resolve(), settings(args), overrides(args))
-    payload.components(plan.runner.os, arch())
     count = len(plan.rules.rules) if plan.rules else 0
-    print(
-        f"bencher: {args.dir}: ok ({plan.runner.os} {plan.runner.type}, {count} rules)",
-        file=sys.stderr,
-    )
+    print(f"bencher: {args.dir}: ok ({plan.runner.type}, {count} rules)", file=sys.stderr)
     return 0
 
 
@@ -65,15 +63,28 @@ def bless(args: argparse.Namespace) -> int:
 
 
 def schema(args: argparse.Namespace) -> int:
-    model = schemas[args.kind]
-    print(json.dumps(model.model_json_schema(by_alias=True), indent=2))
+    print(json.dumps(schemas[args.kind].model_json_schema(by_alias=True), indent=2))
+    return 0
+
+
+def render(args: argparse.Namespace) -> int:
+    if args.all:
+        args.all.mkdir(parents=True, exist_ok=True)
+        for target in targets():
+            path = args.all / f"{target.distro}.{target.release}.{target.kind}.yaml"
+            path.write_text(target.compose())
+            print(path, file=sys.stderr)
+        return 0
+    if not (args.distro and args.release):
+        raise ValueError("render needs <distro> <release>, or --all <dir>")
+    sys.stdout.write(Target(args.type, args.distro, args.release).compose())
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     operator = argparse.ArgumentParser(add_help=False)
     operator.add_argument("--socket", help="Incus or LXD unix socket")
-    operator.add_argument("--cache", type=Path, help="download, fixture and run cache")
+    operator.add_argument("--cache", type=Path, help="fixture and run cache")
     operator.add_argument(
         "--set",
         action="append",
@@ -100,6 +111,12 @@ def main(argv: list[str] | None = None) -> int:
     p = verbs.add_parser("schema", help="print a JSON Schema")
     p.add_argument("kind", choices=sorted(schemas))
     p.set_defaults(handler=schema)
+    p = verbs.add_parser("render", help="print the composed cloud-config for a guest")
+    p.add_argument("distro", nargs="?")
+    p.add_argument("release", nargs="?")
+    p.add_argument("--type", choices=["container", "vm"], default="container")
+    p.add_argument("--all", type=Path, metavar="DIR", help="render every target into DIR")
+    p.set_defaults(handler=render)
     args = parser.parse_args(argv)
     try:
         code: int = args.handler(args)

@@ -1,23 +1,7 @@
-bencher-bin:
+bencher-reporters:
   file.directory:
-    - name: /var/lib/bencher/bin
+    - name: /run/bencher/reporters
     - makedirs: True
-
-{% for name in ["telegraf", "victoria"] %}
-bencher-{{ name }}-bin:
-  file.copy:
-    - name: /var/lib/bencher/bin/{{ name }}
-    - source: /bencher/payload/{{ name }}
-    - force: True
-    - mode: "0755"
-    - require:
-      - file: bencher-bin
-
-bencher-{{ name }}-unit:
-  file.managed:
-    - name: /etc/systemd/system/bencher-{{ name }}.service
-    - source: salt://bencher/{{ name }}.service
-{% endfor %}
 
 bencher-telegraf-conf:
   file.managed:
@@ -27,11 +11,7 @@ bencher-telegraf-conf:
 
 bencher-victoria:
   service.running:
-    - name: bencher-victoria
-    - enable: False
-    - require:
-      - file: bencher-victoria-bin
-      - file: bencher-victoria-unit
+    - name: victoria-metrics
 
 bencher-victoria-health:
   http.wait_for_successful_query:
@@ -43,16 +23,16 @@ bencher-victoria-health:
 
 bencher-telegraf:
   service.running:
-    - name: bencher-telegraf
-    - enable: False
+    - name: telegraf
     - require:
-      - file: bencher-telegraf-bin
-      - file: bencher-telegraf-unit
+      - file: bencher-reporters
       - file: bencher-telegraf-conf
       - http: bencher-victoria-health
 
 bencher-ready:
-  cmd.run:
-    - name: /bencher/payload/salt/bin/python3 -I /var/lib/bencher/bencher/ready.py
+  http.wait_for_successful_query:
+    - name: http://127.0.0.1:8428/api/v1/export?match%5B%5D=%7Breporter%3D%22system%22%7D
+    - match: __name__
+    - wait_for: 60
     - require:
       - service: bencher-telegraf

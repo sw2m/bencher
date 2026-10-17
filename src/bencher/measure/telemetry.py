@@ -1,21 +1,16 @@
 from __future__ import annotations
 
 import json
-import statistics
 from collections import defaultdict
 from typing import Any
 
-from bencher.model import Model
+from bencher.contract import Model
+from bencher.measure import Spread
 
 identity = {"__name__", "reporter", "db", "host", "pid", "parent_pid", "pidfile", "process_name"}
 
 
-class Summary(Model):
-    n: int
-    min: float
-    max: float
-    mean: float
-    median: float
+class Summary(Spread):
     first: float
     last: float
     delta: float
@@ -25,11 +20,7 @@ class Summary(Model):
         if not values:
             return None
         return cls(
-            n=len(values),
-            min=min(values),
-            max=max(values),
-            mean=statistics.fmean(values),
-            median=statistics.median(values),
+            **Spread.over(values),
             first=values[0],
             last=values[-1],
             delta=values[-1] - values[0],
@@ -54,25 +45,25 @@ def fold(lines: list[dict[str, Any]]) -> dict[str, Series]:
     for line in lines:
         bucket = sums[key(line["metric"])]
         for stamp, value in zip(line["timestamps"], line["values"], strict=True):
-            if value is None:
-                continue
-            bucket[stamp / 1000] += float(value)
+            if value is not None:
+                bucket[stamp / 1000] += float(value)
     out: dict[str, Series] = {}
     for name in sorted(sums):
         points = sorted(sums[name].items())
-        out[name] = Series(series=points, summary=Summary.of([v for _, v in points]))
+        out[name] = Series(series=points, summary=Summary.of([value for stamp, value in points]))
     return out
 
 
-def parse(text: str) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
+def split(text: str, declared: set[str]) -> tuple[dict[str, dict[str, Series]], list[str]]:
     by: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    strays: list[str] = []
+    strays: set[str] = set()
     for raw in text.splitlines():
         if not raw.strip():
             continue
-        entry = json.loads(raw)
-        if entry["kind"] == "stray":
-            strays.append(key(entry["line"]["metric"]))
-            continue
-        by[entry["reporter"]].append(entry["line"])
-    return by, strays
+        line = json.loads(raw)
+        reporter = line["metric"].get("reporter")
+        if reporter in declared:
+            by[reporter].append(line)
+        else:
+            strays.add(key(line["metric"]))
+    return {reporter: fold(lines) for reporter, lines in by.items()}, sorted(strays)

@@ -6,12 +6,11 @@ from typing import Literal
 
 from pydantic import Field, field_validator
 
-from bencher.model import Model, Name
+from bencher.contract import Model, Name
 
 
 class Runner(Model):
     image: str = Field(min_length=1)
-    os: Literal["linux", "windows", "bsd"]
     type: Literal["container", "vm"] = "container"
     reporters: list[Name] = []
 

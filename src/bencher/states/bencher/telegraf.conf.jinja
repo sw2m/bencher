@@ -1,7 +1,7 @@
 {%- set bencher = pillar["bencher"] -%}
 [agent]
-  interval = "{{ bencher.telemetry.interval }}"
-  flush_interval = "{{ bencher.telemetry.interval }}"
+  interval = {{ bencher.telemetry.interval | tojson }}
+  flush_interval = {{ bencher.telemetry.interval | tojson }}
   round_interval = true
   omit_hostname = true
   metric_buffer_limit = 1000000
@@ -24,8 +24,8 @@
   fieldexclude = ["cmdline", "user", "status", "created_at", "ppid"]
 {%- for name in bencher.reporters %}
   [[inputs.procstat.filter]]
-    name = "{{ name }}"
-    pid_files = ["/run/bencher/reporters/{{ name }}.pid"]
+    name = {{ name | tojson }}
+    pid_files = [{{ ("/run/bencher/reporters/" ~ name ~ ".pid") | tojson }}]
     recursion_depth = -1
 {%- endfor %}
 {% endif %}

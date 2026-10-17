@@ -1,38 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from importlib import resources
-from importlib.resources.abc import Traversable
+from datetime import timedelta
 
 
 @dataclass(frozen=True)
 class Guest:
-    os: str
+    family: str
     local: str
-    python: str
-
-    def files(self) -> Traversable:
-        return resources.files("bencher").joinpath("guest", self.os)
-
-    def userdata(self) -> str:
-        return self.files().joinpath("bootstrap.sh").read_text()
-
-    def minion(self) -> str:
-        return "\n".join(
-            [
-                "file_client: local",
-                f"root_dir: {self.local}/salt",
-                "log_file: /var/log/bencher/salt.log",
-                "file_roots:",
-                "  base:",
-                f"    - {self.local}/states",
-                f"    - {self.local}/runner/salt",
-                "pillar_roots:",
-                "  base:",
-                f"    - {self.local}/in/pillar",
-                "",
-            ]
-        )
+    program: str
 
     def env(self) -> dict[str, str]:
         return {
@@ -43,13 +19,12 @@ class Guest:
         }
 
     def wait(self) -> list[str]:
-        script = "cloud-init status --wait >/dev/null 2>&1; cat /run/bencher/provisioned"
-        return ["sh", "-c", script]
+        return ["cloud-init", "status", "--wait"]
 
     def log(self) -> list[str]:
-        return ["cat", "/var/log/bencher/provision.log"]
+        return ["cat", "/var/log/cloud-init-output.log"]
 
-    def entry(self, limit: float) -> list[str]:
+    def run(self, limit: timedelta) -> list[str]:
         command = [
             "systemd-run",
             "--quiet",
@@ -58,34 +33,21 @@ class Guest:
             "--collect",
             "--service-type=exec",
             "--unit=bencher-run",
-            "-p",
-            "Slice=bench.slice",
-            "-p",
-            f"RuntimeMaxSec={int(limit)}",
+            "--property=Slice=bench.slice",
+            f"--property=RuntimeMaxSec={int(limit.total_seconds())}",
             f"--working-directory={self.local}/runner",
         ]
         command += [f"--setenv={k}={v}" for k, v in self.env().items()]
-        return [*command, f"{self.local}/runner/run"]
+        return [*command, f"{self.local}/runner/{self.program}"]
 
-    def harvest(self, reporters: list[str]) -> list[str]:
-        script = f"{self.local}/bencher/harvest.py"
-        return [
-            "sh",
-            "-c",
-            f'systemctl stop bencher-telegraf.service && exec {self.python} -I {script} "$@"',
-            "harvest",
-            *reporters,
-        ]
+    def flush(self) -> list[str]:
+        return ["systemctl", "stop", "telegraf.service"]
 
 
-guests = {
-    "linux": Guest(
-        os="linux", local="/var/lib/bencher", python="/bencher/payload/salt/bin/python3"
-    ),
-}
+guests = {"linux": Guest(family="linux", local="/var/lib/bencher", program="run")}
 
 
-def find(os: str) -> Guest:
-    if os not in guests:
-        raise LookupError(f"runner os {os!r} is paved but not wired yet (sw2m/bencher#3)")
-    return guests[os]
+def find(family: str) -> Guest:
+    if family not in guests:
+        raise LookupError(f"runner family {family!r} is paved but not wired yet (sw2m/bencher#3)")
+    return guests[family]

@@ -21,18 +21,19 @@
           };
         };
       };
+      runtime = p: with p; [ deepmerge httpx pydantic pydantic-settings pyincusd pyyaml scipy ];
       bencher = pkgs: (python pkgs).pkgs.buildPythonApplication {
         pname = "bencher";
         version = "0.1.0";
         pyproject = true;
         src = self;
         build-system = [ (python pkgs).pkgs.setuptools ];
-        dependencies = with (python pkgs).pkgs; [ pyincusd pydantic pydantic-settings ];
+        dependencies = runtime (python pkgs).pkgs;
         makeWrapperArgs = [ "--prefix" "PATH" ":" (pkgs.lib.makeBinPath [ pkgs.git ]) ];
         pythonImportsCheck = [ "bencher.cli" ];
       };
       tools = pkgs: [
-        ((python pkgs).withPackages (p: with p; [ pyincusd pydantic pydantic-settings mypy ]))
+        ((python pkgs).withPackages (p: runtime p ++ [ p.mypy p.types-pyyaml ]))
         pkgs.ruff
         pkgs.git
       ];
@@ -55,6 +56,13 @@
         types = pkgs.runCommand "types" { nativeBuildInputs = tools pkgs; } ''
           cd ${self}
           mypy --cache-dir=$TMPDIR/mypy -p bencher
+          touch $out
+        '';
+        cloud = pkgs.runCommand "cloud" { nativeBuildInputs = [ (bencher pkgs) pkgs.cloud-init ]; } ''
+          bencher render --all $TMPDIR/rendered
+          for config in $TMPDIR/rendered/*.yaml; do
+            cloud-init schema --config-file "$config"
+          done
           touch $out
         '';
       });

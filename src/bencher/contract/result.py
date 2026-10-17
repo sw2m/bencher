@@ -1,23 +1,20 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from bencher.model import Key, Model
-from bencher.stats import Stats
-from bencher.telemetry import Series
+from bencher.contract import Model
 
 Verdict = Literal["ok", "err"]
-Stage = Literal["load", "payload", "stage", "launch", "provision", "execute", "harvest", "report"]
 
 
 class Row(Model):
-    name: Key
-    tags: dict[Key, Key] = {}
+    name: str = Field(min_length=1)
+    tags: dict[str, str] = {}
     reporter: str | None = None
-    samples: dict[Key, list[float]] | None = None
+    samples: dict[str, list[float]] | None = None
     verdict: Verdict | None = None
 
     @model_validator(mode="after")
@@ -51,40 +48,3 @@ class Result(Model):
     @classmethod
     def parse(cls, text: str) -> Result:
         return cls.model_validate_json(text)
-
-
-class Line(Row):
-    stats: dict[Key, Stats] | None = None
-    telemetry: dict[str, Series] | None = None
-
-
-class Check(Model):
-    tags: dict[str, str]
-    actual: float | str | None
-    bound: float | str | None
-    passed: bool = Field(alias="pass")
-
-
-class Outcome(Model):
-    line: int
-    rule: str
-    checks: list[Check]
-    passed: bool = Field(alias="pass")
-    error: str | None
-
-
-class Error(Model):
-    stage: Stage
-    message: str
-
-
-class Report(Model):
-    passed: bool = Field(alias="pass")
-    overrides: dict[str, Any] = {}
-    rows: list[Line] = []
-    system: dict[str, Series] = {}
-    expectations: list[Outcome] = []
-    errors: list[Error] = []
-
-    def dump(self) -> str:
-        return self.model_dump_json(by_alias=True, indent=2) + "\n"

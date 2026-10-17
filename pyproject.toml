@@ -1,11 +1,15 @@
 [project]
 name = "bencher"
 version = "0.1.0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
-  "pyincusd>=7.5.1",
+  "deepmerge>=2",
+  "httpx>=0.27",
   "pydantic>=2",
   "pydantic-settings>=2.3",
+  "pyincusd>=7.5.1",
+  "pyyaml>=6",
+  "scipy>=1.11",
 ]
 
 [project.scripts]
@@ -19,11 +23,11 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-bencher = ["payload.toml", "guest/linux/*", "states/bencher/*"]
+bencher = ["cloud/**/*.yaml", "states/bencher/*"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
@@ -31,10 +35,10 @@ ignore = ["RUF012"] # pydantic copies field defaults per instance
 
 [tool.mypy]
 strict = true
-python_version = "3.11"
+python_version = "3.12"
 mypy_path = "src"
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["pyincusd.*"]
+module = ["pyincusd.*", "deepmerge.*", "scipy.*"]
 follow_untyped_imports = true

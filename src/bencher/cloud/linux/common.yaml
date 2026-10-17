@@ -1,0 +1,45 @@
+write_files:
+  - path: /etc/salt/minion.d/bencher.conf
+    content: |
+      file_client: local
+      file_roots:
+        base:
+          - /var/lib/bencher/states
+          - /var/lib/bencher/runner/salt
+      pillar_roots:
+        base:
+          - /var/lib/bencher/in/pillar
+  - path: /etc/systemd/system/victoria-metrics.service.d/bencher.conf
+    content: |
+      [Service]
+      Slice=bencher.slice
+      ExecStart=
+      ExecStart=/usr/bin/victoria-metrics -storageDataPath=/var/lib/victoria-metrics -httpListenAddr=:8428 -retentionPeriod=1d -loggerLevel=WARN
+  - path: /etc/systemd/system/telegraf.service.d/bencher.conf
+    content: |
+      [Service]
+      Slice=bencher.slice
+      User=root
+      ExecStart=
+      ExecStart=/usr/bin/telegraf --config /var/lib/bencher/telegraf.conf
+  - path: /usr/local/libexec/bencher/fence.py
+    content: |
+      import os
+      import subprocess
+      import sys
+
+      cpus = sorted(os.sched_getaffinity(0))
+      if len(cpus) < 2:
+          sys.exit(f"bencher: telemetry fencing needs 2 CPUs, the instance has {len(cpus)}")
+      for unit, group in {"bencher.slice": cpus[:1], "bench.slice": cpus[1:]}.items():
+          allowed = ",".join(str(cpu) for cpu in group)
+          subprocess.run(["systemctl", "set-property", "--runtime", unit, f"AllowedCPUs={allowed}"], check=True)
+
+runcmd:
+  - set -e
+  - systemctl disable --now telegraf.service victoria-metrics.service
+  - timeout 600 sh -c 'until [ -d /bencher/run/runner ]; do sleep 1; done'
+  - rm -rf /var/lib/bencher && mkdir -p /var/lib/bencher && cp -a /bencher/run/. /var/lib/bencher/
+  - python3 /usr/local/libexec/bencher/fence.py
+  - if [ -f /var/lib/bencher/runner/salt/runner.sls ]; then salt-call --local --retcode-passthrough --state-output=changes state.apply runner; fi
+  - salt-call --local --retcode-passthrough --state-output=changes state.apply bencher
