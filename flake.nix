@@ -30,7 +30,7 @@
         build-system = [ (python pkgs).pkgs.setuptools ];
         dependencies = runtime (python pkgs).pkgs;
         makeWrapperArgs = [ "--prefix" "PATH" ":" (pkgs.lib.makeBinPath [ pkgs.git ]) ];
-        pythonImportsCheck = [ "bencher.cli" ];
+        pythonImportsCheck = [ "bencher.cli.bencher" ];
       };
       tools = pkgs: [
         ((python pkgs).withPackages (p: runtime p ++ [ p.mypy p.types-pyyaml ]))

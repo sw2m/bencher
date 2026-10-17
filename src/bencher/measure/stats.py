@@ -5,7 +5,7 @@ import statistics
 
 from scipy.stats import quantile_test
 
-from bencher.measure import Spread
+from bencher.measure.spread import Spread
 
 
 class Stats(Spread):

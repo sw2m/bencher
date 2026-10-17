@@ -1,3 +1,3 @@
-from bencher.cli import main
+from bencher.cli.bencher import Bencher
 
-raise SystemExit(main())
+Bencher.main()

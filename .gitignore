@@ -4,3 +4,4 @@ __pycache__/
 /result
 .mypy_cache/
 .ruff_cache/
+/organization.allowlist.yml

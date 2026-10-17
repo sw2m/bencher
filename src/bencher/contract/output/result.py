@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from bencher.contract import Model
+from bencher.contract.model import Model
 
 Verdict = Literal["ok", "err"]
 

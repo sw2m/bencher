@@ -4,7 +4,7 @@ import json
 import tomllib
 from typing import Any
 
-from bencher.contract import Model
+from bencher.contract.model import Model
 
 
 class Override(Model):

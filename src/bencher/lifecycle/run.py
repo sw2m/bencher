@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import shutil
 import sys
 import uuid
 from pathlib import Path
@@ -11,44 +10,65 @@ from typing import TextIO
 import httpx
 from pydantic import ValidationError
 
-from bencher.contract import explain
-from bencher.contract.override import Override
-from bencher.contract.report import Error, Line, Report, Stage
-from bencher.contract.result import Result
-from bencher.guest import Guest, find
-from bencher.host import share
-from bencher.host.cloud import Target
-from bencher.host.incus import Failure, Incus
+from bencher.contract.input.override import Override
+from bencher.contract.output.error import Error
+from bencher.contract.output.line import Line
+from bencher.contract.output.report import Report
+from bencher.contract.output.result import Result
+from bencher.contract.output.stage import Stage
+from bencher.contract.reason import Reason
+from bencher.guest.guest import Guest
+from bencher.host.failure import Failure
+from bencher.host.incus import Incus
 from bencher.host.settings import Settings
+from bencher.host.share import Share
+from bencher.host.target import Target
+from bencher.lifecycle.halt import Halt
+from bencher.lifecycle.plan import Plan
+from bencher.measure.export import Export
+from bencher.measure.series import Series
 from bencher.measure.stats import Stats
-from bencher.measure.telemetry import Series, split
-from bencher.run.plan import Halt, Plan
 
 
 class Run:
-    def __init__(self, plan: Plan, settings: Settings, log: TextIO = sys.stderr) -> None:
+    def __init__(
+        self, plan: Plan, settings: Settings, keep: bool, log: TextIO = sys.stderr
+    ) -> None:
         self.plan = plan
         self.settings = settings
+        self.keep = keep
         self.log = log
         self.name = f"bencher-{uuid.uuid4().hex[:12]}"
-        self.share = settings.cache / "runs" / self.name
+        self.share = Share(settings.cache / "runs" / self.name)
         self.errors: list[Error] = []
+
+    @classmethod
+    async def perform(
+        cls, root: Path, settings: Settings, keep: bool, overrides: list[Override]
+    ) -> Report:
+        try:
+            plan = Plan.load(root.resolve(), settings.cache, overrides)
+        except Exception as error:
+            message = Reason.of(error)
+            print(f"bencher: load: {message}", file=sys.stderr, flush=True)
+            values = {o.path: o.value for o in overrides}
+            return Report(
+                passed=False, overrides=values, errors=[Error(stage="load", message=message)]
+            )
+        return await cls(plan, settings, keep).start()
 
     def say(self, text: str) -> None:
         print(f"bencher: {text}", file=self.log, flush=True)
 
     def fail(self, stage: Stage, error: BaseException) -> None:
-        message = explain(error)
+        message = Reason.of(error)
         self.say(f"{stage}: {message}")
         self.errors.append(Error(stage=stage, message=message))
-
-    def overrides(self) -> dict[str, object]:
-        return {override.path: override.value for override in self.plan.overrides}
 
     async def create(self, incus: Incus) -> tuple[Guest, Target]:
         plan = self.plan
         self.say(f"launch {self.name}: {plan.runner.type} {plan.runner.image}")
-        self.share.mkdir(parents=True, exist_ok=True)
+        self.share.path.mkdir(parents=True, exist_ok=True)
         await incus.create(
             self.name,
             plan.runner.type,
@@ -60,7 +80,7 @@ class Run:
             devices={
                 "run": {
                     "type": "disk",
-                    "source": str(self.share),
+                    "source": str(self.share.path),
                     "path": "/bencher/run",
                     "readonly": "true",
                 },
@@ -68,7 +88,7 @@ class Run:
             timeout=plan.bench.limits.provision.total_seconds(),
         )
         target = Target.of(plan.runner.type, await incus.config(self.name))
-        guest = find(target.family())
+        guest = Guest.find(target.family())
         entry = plan.tree / guest.program
         if not entry.is_file() or not os.access(entry, os.X_OK):
             raise Halt(f"{entry} is not an executable entrypoint")
@@ -114,7 +134,7 @@ class Run:
         try:
             result = Result.parse(done.stdout.decode())
         except (ValidationError, UnicodeDecodeError) as error:
-            raise Halt(f"entrypoint stdout is not a result: {explain(error)}") from None
+            raise Halt(f"entrypoint stdout is not a result: {Reason.of(error)}") from None
         declared = set(self.plan.runner.reporters)
         for row in result.rows:
             if row.reporter is not None and row.reporter not in declared:
@@ -130,12 +150,13 @@ class Run:
             (await client.get("/internal/force_flush")).raise_for_status()
             response = await client.get("/api/v1/export", params={"match[]": '{__name__!=""}'})
             response.raise_for_status()
-        telemetry, strays = split(response.text, {*self.plan.runner.reporters, "system"})
-        for stray in strays:
+        reporters = {*self.plan.runner.reporters, "system"}
+        export = Export.parse(response.text, reporters)
+        for stray in sorted(export.strays):
             self.errors.append(
                 Error(stage="harvest", message=f"series without a declared reporter: {stray}")
             )
-        return telemetry
+        return {reporter: export.reporter(reporter) for reporter in reporters}
 
     def report(self, result: Result, telemetry: dict[str, dict[str, Series]]) -> Report:
         lines = [
@@ -151,7 +172,7 @@ class Run:
         outcomes = self.plan.rules.check(lines) if self.plan.rules else []
         return Report(
             passed=not self.errors and all(o.passed for o in outcomes),
-            overrides=self.overrides(),
+            overrides=self.plan.values(),
             rows=lines,
             system=telemetry.get("system", {}),
             expectations=outcomes,
@@ -159,7 +180,7 @@ class Run:
         )
 
     def failed(self) -> Report:
-        return Report(passed=False, overrides=self.overrides(), errors=self.errors)
+        return Report(passed=False, overrides=self.plan.values(), errors=self.errors)
 
     async def start(self) -> Report:
         plan = self.plan
@@ -172,7 +193,7 @@ class Run:
         try:
             guest, target = await self.create(incus)
             stage = "stage"
-            share.stage(self.share, plan.root, plan.bench, plan.runner, plan.tree, guest.local)
+            self.share.stage(plan.root, plan.bench, plan.runner, plan.tree, guest.local)
             stage = "launch"
             await self.boot(incus, target)
             stage = "provision"
@@ -193,23 +214,12 @@ class Run:
             await self.teardown(incus)
 
     async def teardown(self, incus: Incus) -> None:
-        if self.settings.keep:
-            self.say(f"kept {self.name}; share at {self.share}")
+        if self.keep:
+            self.say(f"kept {self.name}; share at {self.share.path}")
         else:
             try:
                 await incus.delete(self.name)
             except Failure as error:
                 self.say(f"teardown: {error}")
-            shutil.rmtree(self.share, ignore_errors=True)
+            self.share.remove()
         await incus.close()
-
-
-async def start(root: Path, settings: Settings, overrides: list[Override]) -> Report:
-    try:
-        plan = Plan.load(root.resolve(), settings, overrides)
-    except Exception as error:
-        message = explain(error)
-        print(f"bencher: load: {message}", file=sys.stderr, flush=True)
-        values = {o.path: o.value for o in overrides}
-        return Report(passed=False, overrides=values, errors=[Error(stage="load", message=message)])
-    return await Run(plan, settings).start()

@@ -301,18 +301,19 @@ nix run github:sw2m/bencher/<ref> -- render debian bookworm --type vm
 
 ### Operator settings
 
-How this machine runs bencher, layered: a flag beats an environment variable, which beats the
-user config file, which beats the default.
+How this machine runs bencher, layered by pydantic-settings' `CliApp`: a flag beats an
+environment variable, which beats the user config file, which beats the default. Global settings
+come before the verb (`bencher --socket … run …`); a verb's own settings nest under its name.
 
-| Setting | Flag | Env | Default |
-| --- | --- | --- | --- |
-| `socket` | `--socket` | `BENCHER_SOCKET`, then `INCUS_SOCKET` | the Incus and LXD default sockets |
-| `cache` | `--cache` | `BENCHER_CACHE` | `$XDG_CACHE_HOME/bencher` |
-| `keep` | `--keep` | `BENCHER_KEEP` | `false`: delete the instance after the run |
-| `out` | `--out` | `BENCHER_OUT` | stdout |
+| Setting | Flag | Env | Config file | Default |
+| --- | --- | --- | --- | --- |
+| socket | `--socket` | `BENCHER_SOCKET` | `socket` | the Incus and LXD default sockets |
+| cache | `--cache` | `BENCHER_CACHE` | `cache` | `$XDG_CACHE_HOME/bencher` |
+| keep | `run --keep` | `BENCHER_RUN__KEEP` | `[run] keep` | `false`: delete the instance after the run |
+| out | `run --out` | `BENCHER_RUN__OUT` | `[run] out` | stdout |
 
-The config file is `$XDG_CONFIG_HOME/bencher/config.toml` (or `BENCHER_CONFIG`), with the same
-keys at the top level. Unknown keys are an error.
+The config file is `$XDG_CONFIG_HOME/bencher/config.toml` (or `BENCHER_CONFIG`). Unknown keys
+are an error. `bencher --help` and `bencher <verb> --help` list every setting.
 
 ### Overrides
 
@@ -332,8 +333,8 @@ nix flake check   # ruff, mypy --strict, the package build, cloud-init schema of
 nix develop       # python, ruff, mypy
 ```
 
-`organization.allowlist.yml` records the external API names (pydantic, pydantic-settings) the
-organization audit accepts.
+Code is organized as one class per file, with every operation a method on its subject; each
+package's `__init__.py` only re-exports.
 
 `mergeable` is the one required status check on `main`. Open PRs as drafts; CI runs when a PR
 is marked ready.

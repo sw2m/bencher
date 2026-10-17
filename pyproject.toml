@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-bencher = "bencher.cli:main"
+bencher = "bencher.cli.bencher:Bencher.main"
 
 [build-system]
 requires = ["setuptools>=68"]

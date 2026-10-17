@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import operator
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import Json, model_validator
 
-from bencher.contract import Model
-from bencher.contract.report import Check, Line, Outcome
-from bencher.contract.result import Verdict
-from bencher.measure.stats import Stats
-from bencher.measure.telemetry import Summary
+from bencher.contract.model import Model
+from bencher.contract.output.check import Check
+from bencher.contract.output.line import Line
+from bencher.contract.output.outcome import Outcome
+from bencher.contract.output.result import Verdict
+from bencher.expect.quantity import Quantity
 
 ops: dict[str, Callable[[float, float], bool]] = {
     "<": operator.lt,
@@ -20,38 +21,6 @@ ops: dict[str, Callable[[float, float], bool]] = {
     ">=": operator.ge,
     ">": operator.gt,
 }
-fields = {"samples": Stats.scalars(), "telemetry": Summary.scalars()}
-
-
-class Quantity(Model):
-    kind: Literal["verdict", "samples", "telemetry"]
-    key: str = ""
-    stat: str = ""
-
-    @model_validator(mode="before")
-    @classmethod
-    def parse(cls, value: Any) -> Any:
-        if not isinstance(value, str):
-            return value
-        if value == "verdict":
-            return {"kind": "verdict"}
-        kind, *middle, stat = value.split(".")
-        key = ".".join(middle)
-        if kind not in fields or not key or stat not in fields[kind]:
-            raise ValueError(f"bad quantity {value!r}")
-        return {"kind": kind, "key": key, "stat": stat}
-
-    def read(self, row: Line) -> float | str | None:
-        if self.kind == "verdict":
-            return row.verdict
-        if self.kind == "samples":
-            stats = (row.stats or {}).get(self.key)
-            value = getattr(stats, self.stat) if stats else None
-        else:
-            series = (row.telemetry or {}).get(self.key)
-            summary = series.summary if series else None
-            value = getattr(summary, self.stat) if summary else None
-        return None if value is None else float(value)
 
 
 class Relative(Model):
@@ -83,6 +52,23 @@ class Rule(Model):
     def owned(self) -> bool:
         return self.quantity.kind == "verdict" and self.op == "=="
 
+    def threshold(
+        self, row: Line, index: dict[tuple[str, tuple[tuple[str, str], ...]], Line]
+    ) -> float | str | None:
+        if not isinstance(self.bound, Relative):
+            return self.bound
+        tags = {**row.tags, **self.bound.of}
+        reference = index.get((row.name, tuple(sorted(tags.items()))))
+        base = self.quantity.read(reference) if reference else None
+        return self.bound.times * base if isinstance(base, float) else None
+
+    def compare(self, actual: float | str | None, bound: float | str | None) -> bool:
+        if actual is None or bound is None:
+            return False
+        if isinstance(actual, str) or isinstance(bound, str):
+            return (actual == bound) == (self.op == "==")
+        return ops[self.op](actual, bound)
+
     def check(self, rows: list[Line]) -> Outcome:
         matched = [row for row in rows if self.matches(row)]
         if not matched:
@@ -93,21 +79,15 @@ class Rule(Model):
         checks = []
         for row in matched:
             actual = self.quantity.read(row)
-            bound: float | str | None
-            if isinstance(self.bound, Relative):
-                tags = {**row.tags, **self.bound.of}
-                ref = index.get((row.name, tuple(sorted(tags.items()))))
-                base = self.quantity.read(ref) if ref else None
-                bound = self.bound.times * base if isinstance(base, float) else None
-            else:
-                bound = self.bound
-            if actual is None or bound is None:
-                ok = False
-            elif isinstance(actual, str) or isinstance(bound, str):
-                ok = (actual == bound) == (self.op == "==")
-            else:
-                ok = ops[self.op](actual, bound)
-            checks.append(Check(tags=dict(row.tags), actual=actual, bound=bound, passed=ok))
+            bound = self.threshold(row, index)
+            checks.append(
+                Check(
+                    tags=dict(row.tags),
+                    actual=actual,
+                    bound=bound,
+                    passed=self.compare(actual, bound),
+                )
+            )
         return Outcome(
             line=self.line,
             rule=self.raw,
