@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 from pydantic_settings import CliApp, CliSubCommand, SettingsConfigDict, get_subcommand
 
 from bencher.cli.bless import Bless
@@ -31,7 +31,11 @@ class Bencher(Settings):
 
     @classmethod
     def main(cls) -> None:
-        root = CliApp.run(cls, cli_args=sys.argv[1:])
+        try:
+            root = CliApp.run(cls, cli_args=sys.argv[1:])
+        except ValidationError as error:
+            print(f"bencher: settings: {Reason.of(error)}", file=sys.stderr)
+            raise SystemExit(1) from None
         verb = get_subcommand(root)
         assert isinstance(verb, Verb)
         try:

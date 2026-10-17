@@ -20,7 +20,7 @@ class Export:
         labels = sorted((k, v) for k, v in metric.items() if k not in identity)
         if not labels:
             return metric["__name__"]
-        return metric["__name__"] + "{" + ",".join(f"{k}={v}" for k, v in labels) + "}"
+        return metric["__name__"] + "{" + ",".join(f"{k}={json.dumps(v)}" for k, v in labels) + "}"
 
     @classmethod
     def parse(cls, text: str, declared: set[str]) -> Export:
@@ -36,11 +36,14 @@ class Export:
                 export.strays.add(cls.key(line["metric"]))
         return export
 
-    def reporter(self, name: str) -> dict[str, Series]:
+    def reporter(self, name: str, interval: float) -> dict[str, Series]:
         sums: dict[str, dict[float, float]] = defaultdict(lambda: defaultdict(float))
         for line in self.lines.get(name, []):
-            bucket = sums[self.key(line["metric"])]
+            slots: dict[float, float] = {}
             for stamp, value in zip(line["timestamps"], line["values"], strict=True):
                 if value is not None:
-                    bucket[stamp / 1000] += float(value)
+                    slots[round(stamp / 1000 / interval) * interval] = float(value)
+            bucket = sums[self.key(line["metric"])]
+            for slot, value in slots.items():
+                bucket[slot] += value
         return {metric: Series.of(points) for metric, points in sorted(sums.items())}

@@ -11,7 +11,8 @@ from bencher.contract.input.limits import Limits
 from bencher.contract.input.override import Override
 from bencher.contract.input.pin import Pin
 from bencher.contract.input.telemetry import Telemetry
-from bencher.contract.model import Model, Name
+from bencher.contract.model import Model
+from bencher.contract.plain import Name
 
 replace = Merger([(dict, ["merge"])], ["override"], ["override"])
 

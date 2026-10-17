@@ -132,14 +132,20 @@ class Incus:
             response = await self.instances.instance_state_get(name)
         except ApiException as error:
             raise Failure.of(error) from None
+        config = await self.config(name)
+        nics = {
+            v.lower()
+            for k, v in config.items()
+            if k.startswith("volatile.") and k.endswith(".hwaddr")
+        }
         network = (response.metadata.network if response.metadata else None) or {}
-        for interface, state in network.items():
-            if interface == "lo" or state.addresses is None:
+        for state in network.values():
+            if (state.hwaddr or "").lower() not in nics or state.addresses is None:
                 continue
             for entry in state.addresses:
                 if entry.family == "inet" and entry.scope == "global" and entry.address:
                     return entry.address
-        raise Failure(f"instance {name} has no global IPv4 address")
+        raise Failure(f"instance {name} has no global IPv4 address on its Incus NIC")
 
     async def state(self, name: str, action: str, timeout: float) -> None:
         try:

@@ -10,5 +10,5 @@ from bencher.contract.model import Model
 class Limits(Model):
     cpu: int = Field(ge=2)  # one CPU is fenced for telemetry
     memory: ByteSize = Field(default=ByteSize(2 * 1024**3))
-    provision: timedelta = timedelta(minutes=30)
-    run: timedelta = timedelta(hours=1)
+    provision: timedelta = Field(default=timedelta(minutes=30), gt=timedelta(0))
+    run: timedelta = Field(default=timedelta(hours=1), gt=timedelta(0))

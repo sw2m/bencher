@@ -51,13 +51,14 @@ class Share:
         (self.inputs / "params.json").write_bytes(pydantic_core.to_json(bench.params) + b"\n")
 
     def pillar(self, bench: Bench, runner: Runner, artifacts: dict[str, str]) -> None:
-        milliseconds = int(bench.telemetry.interval.total_seconds() * 1000)
+        seconds = bench.telemetry.interval.total_seconds()
+        ready = max(60, int(3 * seconds) + 1)  # the first gather lands within 2 intervals
         data: dict[str, Any] = {
             "bencher": {
                 "params": bench.params,
                 "artifacts": artifacts,
                 "reporters": runner.reporters,
-                "telemetry": {"interval": f"{milliseconds}ms"},
+                "telemetry": {"interval": f"{int(seconds * 1000)}ms", "ready": ready},
             }
         }
         pillar = self.inputs / "pillar"

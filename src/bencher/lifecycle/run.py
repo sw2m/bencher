@@ -30,12 +30,12 @@ from bencher.measure.stats import Stats
 
 class Run:
     def __init__(
-        self, plan: Plan, settings: Settings, keep: bool, log: TextIO = sys.stderr
+        self, plan: Plan, settings: Settings, keep: bool, log: TextIO | None = None
     ) -> None:
         self.plan = plan
         self.settings = settings
         self.keep = keep
-        self.log = log
+        self.log = log if log is not None else sys.stderr
         self.name = f"bencher-{uuid.uuid4().hex[:12]}"
         self.share = Share(settings.cache / "runs" / self.name)
         self.errors: list[Error] = []
@@ -49,9 +49,10 @@ class Run:
         except Exception as error:
             message = Reason.of(error)
             print(f"bencher: load: {message}", file=sys.stderr, flush=True)
-            values = {o.path: o.value for o in overrides}
             return Report(
-                passed=False, overrides=values, errors=[Error(stage="load", message=message)]
+                passed=False,
+                overrides=Override.values(overrides),
+                errors=[Error(stage="load", message=message)],
             )
         return await cls(plan, settings, keep).start()
 
@@ -105,7 +106,7 @@ class Run:
             except Failure:
                 await asyncio.sleep(2)
                 continue
-            if done.code == 0:
+            if done.code in (0, 2):  # 2 is cloud-init's "done, degraded"
                 return
             if done.code == 1:
                 await self.dump(incus)
@@ -154,7 +155,8 @@ class Run:
             self.errors.append(
                 Error(stage="harvest", message=f"series without a declared reporter: {stray}")
             )
-        return {reporter: export.reporter(reporter) for reporter in reporters}
+        interval = self.plan.bench.telemetry.interval.total_seconds()
+        return {reporter: export.reporter(reporter, interval) for reporter in reporters}
 
     def report(self, result: Result, telemetry: dict[str, dict[str, Series]]) -> Report:
         lines = [
@@ -170,7 +172,7 @@ class Run:
         outcomes = self.plan.rules.check(lines) if self.plan.rules else []
         return Report(
             passed=not self.errors and all(o.passed for o in outcomes),
-            overrides=self.plan.values(),
+            overrides=Override.values(self.plan.overrides),
             rows=lines,
             system=telemetry.get("system", {}),
             expectations=outcomes,
@@ -178,15 +180,27 @@ class Run:
         )
 
     def failed(self) -> Report:
-        return Report(passed=False, overrides=self.plan.values(), errors=self.errors)
+        return Report(
+            passed=False, overrides=Override.values(self.plan.overrides), errors=self.errors
+        )
 
     async def start(self) -> Report:
-        plan = self.plan
         try:
             incus = Incus(self.settings.socket)
         except Exception as error:
             self.fail("launch", error)
             return self.failed()
+        try:
+            report = await self.progress(incus)
+        finally:
+            failure = await self.teardown(incus)
+        if failure is None:
+            return report
+        self.fail("teardown", failure)
+        return report.model_copy(update={"passed": False, "errors": self.errors})
+
+    async def progress(self, incus: Incus) -> Report:
+        plan = self.plan
         stage: Stage = "launch"
         try:
             target = await self.create(incus)
@@ -208,16 +222,16 @@ class Run:
         except Exception as error:
             self.fail(stage, error)
             return self.failed()
-        finally:
-            await self.teardown(incus)
 
-    async def teardown(self, incus: Incus) -> None:
+    async def teardown(self, incus: Incus) -> Failure | None:
+        failure = None
         if self.keep:
             self.say(f"kept {self.name}; share at {self.share.path}")
         else:
             try:
                 await incus.delete(self.name)
             except Failure as error:
-                self.say(f"teardown: {error}")
+                failure = error
             self.share.remove()
         await incus.close()
+        return failure

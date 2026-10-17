@@ -33,6 +33,6 @@ bencher-ready:
   http.wait_for_successful_query:
     - name: http://127.0.0.1:8428/api/v1/export?match%5B%5D=%7Breporter%3D%22system%22%7D
     - match: __name__
-    - wait_for: 60
+    - wait_for: {{ pillar["bencher"]["telemetry"]["ready"] }}
     - require:
       - service: bencher-telegraf

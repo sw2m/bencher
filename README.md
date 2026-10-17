@@ -149,7 +149,9 @@ must carry a declared `reporter` tag; any other series fails the run at `harvest
 
 **Harvest** happens after the entrypoint exits: `bencher-agent flush` stops Telegraf (a final
 gather and flush), then the host flushes VictoriaMetrics (`/internal/force_flush`) and exports every
-series over HTTP. Series of one reporter are summed across its processes.
+series over HTTP. Series of one reporter are summed across its processes, per collection interval
+(each process's samples are bucketed to the interval first, so processes sampled a few
+milliseconds apart still sum into one point).
 
 ## Contracts
 
@@ -257,7 +259,7 @@ with the environment in `/etc/bencher/env`:
                                                       "first": 98.2, "last": 98.2,
                                                       "delta": 0.0}}}}
   ],
-  "system": {"cpu_usage_user{cpu=cpu-total}": {"series": [], "summary": null}},
+  "system": {"cpu_usage_user{cpu=\"cpu-total\"}": {"series": [], "summary": null}},
   "expectations": [
     {"line": 2, "rule": "throughput\t{\"pair\": \"linkup.pppd\"}\tsamples.Mbit/s.median\t>=\t100",
      "checks": [{"tags": {"pair": "linkup.pppd"}, "actual": 141.2, "bound": 100.0, "pass": true}],
@@ -270,11 +272,18 @@ with the environment in `/etc/bencher/env`:
 - `overrides` is every `--set` applied to `bench.toml` for this run, as dotted key → value. A
   consumer CI can refuse a report whose `overrides` isn't empty.
 - `stats.ci` is the distribution-free 95% confidence interval of the median
-  (`scipy.stats.quantile_test`), `null` when there are too few samples to reach 95%.
+  (`scipy.stats.quantile_test`) as `[low, high]`, `null` when there are too few samples (under
+  six) to reach 95%.
 - `telemetry` keys are VictoriaMetrics metric names, with any distinguishing labels as
-  `name{k=v,...}`. Counters are cumulative, so their `delta` is the run's total.
+  `name{k="v",...}` (values JSON-quoted). The labels that identify a process or the pipeline
+  (`reporter`, `pid`, `parent_pid`, `pidfile`, `process_name`, `host`, `db`) are dropped from the
+  key; series differing only in those are summed. Counters are cumulative, so their `delta` is
+  the run's total, unless the process restarted mid-run.
+- A row's `telemetry` is its own reporter's; `system` is the machine-wide telemetry, which rules
+  cannot reference.
 - `errors` entries are `{stage, message}`, `stage` one of `load`, `stage`, `launch`,
-  `provision`, `execute`, `harvest`, `report`.
+  `provision`, `execute`, `harvest`, `report`, `teardown`. A failed teardown (a leaked instance)
+  fails the report.
 
 ### `expect.tsv` (consumer)
 
@@ -292,14 +301,25 @@ parse	{"impl": "socat", "input": "TCP4:h:1"}	verdict	==	"err"
   Every rule must match at least one row, so stale rules fail.
 - **quantity** is `verdict`, `samples.<unit>.<stat>` or `telemetry.<metric>.<stat>`, where
   `<stat>` is a scalar field of the corresponding `stats` or `summary`.
-- **op** is one of `<`, `<=`, `==`, `!=`, `>=`, `>`; verdicts take `==` or `!=`.
-- **bound** is a number, `"ok"`/`"err"` for verdicts, or `{"times": <factor>, "of": <tags>}`:
-  the same quantity on the row with the same name whose tags are the matched row's tags updated
-  with `of`.
+- **op** is one of `<`, `<=`, `==`, `!=`, `>=`, `>`; verdicts take `==` or `!=`. `==` on a
+  measured float is legal but rarely what you want.
+- **bound** is a number (not a boolean), `"ok"`/`"err"` for verdicts, or
+  `{"times": <factor>, "of": <tags>}`: the same quantity on the row with the same name whose tags
+  are the matched row's tags updated with `of`. `of` must change the tags. A missing reference row
+  or quantity fails the check with `bound: null`, and the outcome's `error` names what was
+  missing.
 
-`bencher bless <bench dir> --report <report.json>` snapshots every verdict row into an exact
-`verdict == …` rule and keeps every other line verbatim. Measure bounds are only ever set by
-hand.
+`bencher bless <bench dir> --report <report.json>` rewrites `expect.tsv` from a completed run (it
+refuses a report with `errors`), printing every change:
+
+- an exact `verdict == …` rule (tags equal to a row's full tags) is updated to that row's
+  verdict;
+- an exact rule whose row is gone, and that matches no row at all, is dropped;
+- a broader `verdict ==` rule is kept verbatim; rows it already asserts get no exact rule, and rows
+  that now contradict it are reported;
+- every other verdict row gets a new exact rule, appended;
+- every other line (comments, measure rules) is kept verbatim. Measure bounds are only ever set by
+  hand.
 
 ## Operating systems
 

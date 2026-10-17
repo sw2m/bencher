@@ -28,6 +28,3 @@ class Plan:
             if not (root / path).exists():
                 raise Halt(f"artifact {name}: {root / path} does not exist")
         return cls(root, bench, runner, tree, Rules.load(root), overrides)
-
-    def values(self) -> dict[str, object]:
-        return {override.path: override.value for override in self.overrides}

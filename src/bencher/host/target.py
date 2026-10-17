@@ -3,17 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from importlib import resources
 from importlib.resources.abc import Traversable
-from typing import Any
+from typing import Any, get_args
 
 import yaml
 from deepmerge import Merger
 
+from bencher.contract.input.runner import Runner
 from bencher.host.dumper import Dumper
 
 # see https://cloudinit.readthedocs.io/en/latest/reference/merging.html
 merger = Merger([(list, ["append"]), (dict, ["merge"])], ["override"], ["override"])
 tree = resources.files("bencher").joinpath("cloud")
-kinds = ("container", "vm")
+kinds = get_args(Runner.model_fields["type"].annotation)
 
 
 @dataclass(frozen=True)
@@ -24,7 +25,9 @@ class Target:
 
     @classmethod
     def of(cls, kind: str, config: dict[str, str]) -> Target:
-        return cls(kind, config.get("image.os", "").lower(), config.get("image.release", ""))
+        return cls(
+            kind, config.get("image.os", "").lower(), config.get("image.release", "").lower()
+        )
 
     @staticmethod
     def releases() -> dict[str, list[str]]:

@@ -33,7 +33,7 @@ class Rules:
         lines = text.splitlines()
         rules = {}
         for number, cells in Tsv.rows(text):
-            if not cells or cells[0].lstrip().startswith("#"):
+            if not "".join(cells).strip() or cells[0].lstrip().startswith("#"):
                 continue
             if len(cells) != len(columns):
                 raise ValueError(f"expect.tsv:{number}: expected {len(columns)} cells")
@@ -54,9 +54,10 @@ class Rules:
     def check(self, rows: list[Line]) -> list[Outcome]:
         return [rule.check(rows) for rule in self.rules.values()]
 
-    def bless(self, rows: list[Line]) -> str:
+    def bless(self, rows: list[Line]) -> tuple[str, list[str]]:
         verdicts = {(line.name, self.canon(line.tags)): line for line in rows if line.verdict}
         covered: set[tuple[str, str]] = set()
+        changes: list[str] = []
         out: list[str] = []
         for number, raw in enumerate(self.lines, start=1):
             rule = self.rules.get(number)
@@ -66,10 +67,28 @@ class Rules:
             exact = (rule.name, self.canon(rule.tags))
             if exact in verdicts:
                 covered.add(exact)
-                out.append(self.blessed(verdicts[exact]))
-            elif any(rule.matches(line) for line in rows):
-                out.append(raw)
+                fresh = self.blessed(verdicts[exact])
+                if fresh != raw:
+                    changes.append(f"updated line {number}: {fresh}")
+                out.append(fresh)
+                continue
+            matched = [line for line in rows if line.verdict and rule.matches(line)]
+            if not matched:
+                changes.append(f"dropped line {number}, it matches no row: {raw}")
+                continue
+            out.append(raw)
+            for line in matched:
+                if line.verdict == rule.bound:
+                    covered.add((line.name, self.canon(line.tags)))
+                else:
+                    changes.append(
+                        f"kept line {number}, but {line.name} {self.canon(line.tags)} is now"
+                        f" {json.dumps(line.verdict)}: {raw}"
+                    )
         if not self.lines:
             out.append("# " + Tsv.row(columns))
-        out.extend(self.blessed(verdicts[exact]) for exact in sorted(set(verdicts) - covered))
-        return "\n".join(out) + "\n"
+        for exact in sorted(set(verdicts) - covered):
+            fresh = self.blessed(verdicts[exact])
+            changes.append(f"added: {fresh}")
+            out.append(fresh)
+        return "\n".join(out) + "\n", changes

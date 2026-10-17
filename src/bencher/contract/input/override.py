@@ -30,3 +30,7 @@ class Override(Model):
             [(part, node)] = node.items()
             parts.append(part)
         return cls(path=".".join(parts), value=node, tree=tree)
+
+    @staticmethod
+    def values(overrides: list[Override]) -> dict[str, Any]:
+        return {override.path: override.value for override in overrides}

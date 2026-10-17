@@ -6,7 +6,8 @@ from typing import Literal
 
 from pydantic import Field, field_validator
 
-from bencher.contract.model import Model, Name
+from bencher.contract.model import Model
+from bencher.contract.plain import Name
 
 
 class Runner(Model):
