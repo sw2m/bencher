@@ -72,9 +72,9 @@ release layer fails the run at `launch` and names what is supported.
 Layers merge by cloud-init's own default rule
 ([merging](https://cloudinit.readthedocs.io/en/latest/reference/merging.html)): maps merge
 recursively, lists append, scalars are replaced by the more specific layer. Composition happens
-on the host, so the result is one document that behaves the same under any init system, and
-`bencher render <distro> <release> [--type vm]` prints it. Overlays live only in bencher; runners
-provision through Salt.
+on the host, inside a run whenever no cached runner image hits, so the result is one document
+that behaves the same under any init system. It is internal: overlays live only in bencher, and
+runners provision through Salt.
 
 For Linux the layers install Salt (`salt-common`), Telegraf and VictoriaMetrics from their
 signed repositories at pinned versions, write the Salt minion config and the systemd drop-ins
@@ -296,7 +296,6 @@ nix run github:sw2m/bencher/<ref> -- run crates/mux/bench --out report.json
 nix run github:sw2m/bencher/<ref> -- validate crates/mux/bench
 nix run github:sw2m/bencher/<ref> -- bless crates/mux/bench --report report.json
 nix run github:sw2m/bencher/<ref> -- schema report
-nix run github:sw2m/bencher/<ref> -- render debian bookworm --type vm
 ```
 
 ### Operator settings

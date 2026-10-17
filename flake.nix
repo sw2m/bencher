@@ -49,8 +49,8 @@
         lint = pkgs.runCommand "lint" { nativeBuildInputs = tools pkgs; } ''
           cd ${self}
           export RUFF_CACHE_DIR=$TMPDIR/ruff
-          ruff check src
-          ruff format --check src
+          ruff check src ci
+          ruff format --check src ci
           touch $out
         '';
         types = pkgs.runCommand "types" { nativeBuildInputs = tools pkgs; } ''
@@ -58,8 +58,8 @@
           mypy --cache-dir=$TMPDIR/mypy -p bencher
           touch $out
         '';
-        cloud = pkgs.runCommand "cloud" { nativeBuildInputs = [ (bencher pkgs) pkgs.cloud-init ]; } ''
-          bencher render --all $TMPDIR/rendered
+        cloud = pkgs.runCommand "cloud" { nativeBuildInputs = tools pkgs ++ [ pkgs.cloud-init ]; } ''
+          PYTHONPATH=${self}/src python ${self}/ci/render.py $TMPDIR/rendered
           for config in $TMPDIR/rendered/*.yaml; do
             cloud-init schema --config-file "$config"
           done

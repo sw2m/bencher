@@ -6,7 +6,6 @@ from pydantic import Field
 from pydantic_settings import CliApp, CliSubCommand, SettingsConfigDict, get_subcommand
 
 from bencher.cli.bless import Bless
-from bencher.cli.render import Render
 from bencher.cli.run import Run
 from bencher.cli.schema import Schema
 from bencher.cli.validate import Validate
@@ -29,7 +28,6 @@ class Bencher(Settings):
     )
     bless: CliSubCommand[Bless] = Field(description="snapshot a report's verdicts into expect.tsv")
     contract: CliSubCommand[Schema] = Field(alias="schema", description="print a JSON Schema")
-    render: CliSubCommand[Render] = Field(description="print the composed cloud-config")
 
     @classmethod
     def main(cls) -> None:
