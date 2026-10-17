@@ -15,27 +15,44 @@ from bencher.contract.input.runner import Runner
 class Share:
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.inputs = path / "in"
 
     def stage(self, root: Path, bench: Bench, runner: Runner, tree: Path, local: str) -> None:
         self.remove()
         self.path.mkdir(parents=True)
+        self.states()
+        self.runner(tree)
+        artifacts = self.artifacts(root, bench, local)
+        self.params(bench)
+        self.pillar(bench, runner, artifacts)
+        self.publish()
+
+    def states(self) -> None:
         with resources.as_file(resources.files("bencher").joinpath("states")) as states:
             shutil.copytree(states, self.path / "states")
+
+    def runner(self, tree: Path) -> None:
         shutil.copytree(tree, self.path / "runner", symlinks=True)
-        inputs = self.path / "in"
-        (inputs / "artifacts").mkdir(parents=True)
-        artifacts = {}
+
+    def artifacts(self, root: Path, bench: Bench, local: str) -> dict[str, str]:
+        (self.inputs / "artifacts").mkdir(parents=True)
+        placed = {}
         for name, path in bench.artifacts.items():
             source = (root / path).resolve()
-            target = inputs / "artifacts" / name
+            target = self.inputs / "artifacts" / name
             if source.is_dir():
                 shutil.copytree(source, target)
             else:
                 shutil.copy2(source, target)
-            artifacts[name] = f"{local}/in/artifacts/{name}"
-        (inputs / "params.json").write_bytes(pydantic_core.to_json(bench.params) + b"\n")
+            placed[name] = f"{local}/in/artifacts/{name}"
+        return placed
+
+    def params(self, bench: Bench) -> None:
+        (self.inputs / "params.json").write_bytes(pydantic_core.to_json(bench.params) + b"\n")
+
+    def pillar(self, bench: Bench, runner: Runner, artifacts: dict[str, str]) -> None:
         milliseconds = int(bench.telemetry.interval.total_seconds() * 1000)
-        pillar: dict[str, Any] = {
+        data: dict[str, Any] = {
             "bencher": {
                 "params": bench.params,
                 "artifacts": artifacts,
@@ -43,10 +60,10 @@ class Share:
                 "telemetry": {"interval": f"{milliseconds}ms"},
             }
         }
-        (inputs / "pillar").mkdir()
-        (inputs / "pillar" / "top.sls").write_text(yaml.safe_dump({"base": {"*": ["bencher"]}}))
-        (inputs / "pillar" / "bencher.sls").write_text(yaml.safe_dump(pillar))
-        self.publish()
+        pillar = self.inputs / "pillar"
+        pillar.mkdir()
+        (pillar / "top.sls").write_text(yaml.safe_dump({"base": {"*": ["bencher"]}}))
+        (pillar / "bencher.sls").write_text(yaml.safe_dump(data))
 
     def publish(self) -> None:
         for path in [self.path, *self.path.rglob("*")]:
