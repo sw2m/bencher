@@ -49,8 +49,8 @@
         lint = pkgs.runCommand "lint" { nativeBuildInputs = tools pkgs; } ''
           cd ${self}
           export RUFF_CACHE_DIR=$TMPDIR/ruff
-          ruff check src ci
-          ruff format --check src ci
+          ruff check src
+          ruff format --check src
           touch $out
         '';
         types = pkgs.runCommand "types" { nativeBuildInputs = tools pkgs; } ''
@@ -59,7 +59,17 @@
           touch $out
         '';
         cloud = pkgs.runCommand "cloud" { nativeBuildInputs = tools pkgs ++ [ pkgs.cloud-init ]; } ''
-          PYTHONPATH=${self}/src python ${self}/ci/render.py $TMPDIR/rendered
+          PYTHONPATH=${self}/src python - "$TMPDIR/rendered" <<'EOF'
+          import sys
+          from pathlib import Path
+
+          from bencher.host.target import Target
+
+          out = Path(sys.argv[1])
+          out.mkdir()
+          for target in Target.every():
+              (out / f"{target.distro}.{target.release}.{target.kind}.yaml").write_text(target.compose())
+          EOF
           for config in $TMPDIR/rendered/*.yaml; do
             cloud-init schema --config-file "$config"
           done

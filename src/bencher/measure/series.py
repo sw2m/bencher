@@ -11,4 +11,5 @@ class Series(Model):
     @classmethod
     def of(cls, points: dict[float, float]) -> Series:
         ordered = sorted(points.items())
-        return cls(series=ordered, summary=Summary.of([value for stamp, value in ordered]))
+        values = [value for stamp, value in ordered]
+        return cls(series=ordered, summary=Summary.of(values) if values else None)

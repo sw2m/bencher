@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from bencher.measure.spread import Spread
 
 
@@ -9,12 +11,5 @@ class Summary(Spread):
     delta: float
 
     @classmethod
-    def of(cls, values: list[float]) -> Summary | None:
-        if not values:
-            return None
-        return cls(
-            **Spread.over(values),
-            first=values[0],
-            last=values[-1],
-            delta=values[-1] - values[0],
-        )
+    def extra(cls, values: list[float]) -> dict[str, Any]:
+        return {"first": values[0], "last": values[-1], "delta": values[-1] - values[0]}

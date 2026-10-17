@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import statistics
+from typing import Any, Self
 
 from bencher.contract.model import Model
 
@@ -12,15 +13,20 @@ class Spread(Model):
     mean: float
     median: float
 
-    @staticmethod
-    def over(values: list[float]) -> dict[str, float]:
-        return {
-            "n": len(values),
-            "min": min(values),
-            "max": max(values),
-            "mean": statistics.fmean(values),
-            "median": statistics.median(values),
-        }
+    @classmethod
+    def of(cls, values: list[float]) -> Self:
+        return cls(
+            n=len(values),
+            min=min(values),
+            max=max(values),
+            mean=statistics.fmean(values),
+            median=statistics.median(values),
+            **cls.extra(values),
+        )
+
+    @classmethod
+    def extra(cls, values: list[float]) -> dict[str, Any]:
+        return {}
 
     @classmethod
     def scalars(cls) -> set[str]:
