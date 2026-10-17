@@ -12,7 +12,7 @@ from bencher.host.settings import Settings
 from bencher.lifecycle.plan import Plan
 
 
-class Validate(Verb):
+class Lint(Verb):
     dir: CliPositionalArg[Path] = Field(description="bench directory holding bench.toml")
     overrides: list[str] = Field(
         default=[], alias="set", description="KEY=VALUE override of bench.toml, repeatable"

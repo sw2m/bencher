@@ -6,9 +6,9 @@ from pydantic import Field
 from pydantic_settings import CliApp, CliSubCommand, SettingsConfigDict, get_subcommand
 
 from bencher.cli.bless import Bless
+from bencher.cli.lint import Lint
 from bencher.cli.run import Run
 from bencher.cli.schema import Schema
-from bencher.cli.validate import Validate
 from bencher.cli.verb import Verb
 from bencher.contract.reason import Reason
 from bencher.host.settings import Settings
@@ -23,8 +23,8 @@ class Bencher(Settings):
     )
 
     run: CliSubCommand[Run] = Field(description="run a benchmark and write its report")
-    check: CliSubCommand[Validate] = Field(
-        alias="validate", description="check bench.toml, the fixture runner and expect.tsv"
+    lint: CliSubCommand[Lint] = Field(
+        description="lint bench.toml, the fixture runner and expect.tsv without launching"
     )
     bless: CliSubCommand[Bless] = Field(description="snapshot a report's verdicts into expect.tsv")
     contract: CliSubCommand[Schema] = Field(alias="schema", description="print a JSON Schema")

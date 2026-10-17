@@ -293,7 +293,7 @@ fail at `launch` until wired (#3).
 
 ```sh
 nix run github:sw2m/bencher/<ref> -- run crates/mux/bench --out report.json
-nix run github:sw2m/bencher/<ref> -- validate crates/mux/bench
+nix run github:sw2m/bencher/<ref> -- lint crates/mux/bench
 nix run github:sw2m/bencher/<ref> -- bless crates/mux/bench --report report.json
 nix run github:sw2m/bencher/<ref> -- schema report
 ```
@@ -317,7 +317,7 @@ are an error. `bencher --help` and `bencher <verb> --help` list every setting.
 ### Overrides
 
 `bench.toml` is the consumer's reviewed decision and is not layered. `--set <dotted.key>=<value>`
-(repeatable, on `run` and `validate`) overrides one value for one invocation; the value is
+(repeatable, on `run` and `lint`) overrides one value for one invocation; the value is
 parsed as TOML, falling back to a plain string. Every override is recorded in the report's
 `overrides`, so a run that didn't use the committed configuration is always visible.
 
