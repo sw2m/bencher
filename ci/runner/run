@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+seconds=$(jq -r .duration "$BENCHER_IN/params.json")
+test -s "$BENCHER_IN/artifacts/probe"
+sh -c 'echo $$ > "$BENCHER_REPORTERS/spin.pid"
+  (timeout "$1" sh -c "while :; do :; done") &
+  timeout "$1" sh -c "while :; do :; done"
+  wait' spin "$seconds" &
+spin=$!
+python3 -c 'import os, socket
+host, port = os.environ["BENCHER_PUSH_UDP"].split(":")
+socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(b"custom,reporter=spin value=42\n", (host, int(port)))'
+wait "$spin"
+echo "spun for ${seconds}s" >&2
+cat <<'JSON'
+{"rows": [
+  {"name": "spin", "tags": {"impl": "sh"}, "reporter": "spin", "samples": {"s": [1.0, 1.1, 0.9, 1.0, 1.2, 1.05, 0.95]}},
+  {"name": "spin", "tags": {"impl": "ref"}, "samples": {"s": [2.0, 2.1, 1.9]}},
+  {"name": "parse", "tags": {"input": "TCP4:h:1,fork"}, "verdict": "ok"},
+  {"name": "parse", "tags": {"input": "BOGUS"}, "verdict": "err"}
+]}
+JSON

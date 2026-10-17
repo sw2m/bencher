@@ -1,0 +1,3 @@
+#cloud-config
+runcmd:
+  - /src/ci/setup.sh ubuntu

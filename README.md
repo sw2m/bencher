@@ -373,5 +373,21 @@ nix develop       # python, ruff, mypy
 Code is organized as one class per file, with every operation a method on its subject; each
 package's `__init__.py` only re-exports.
 
-`mergeable` is the one required status check on `main`. Open PRs as drafts; CI runs when a PR
-is marked ready.
+### End-to-end
+
+`ci/` holds a consumer (`ci/bench/`: `bench.toml`, `expect.tsv`, an artifact) and a fixture runner
+in two shapes (`ci/runner/` as a container, `ci/vm/` as a VM, sharing files by symlink). CI's
+`run` job does a full run of each on a GitHub runner:
+
+```sh
+sudo ci/setup.sh "$USER"                    # Incus, nix, and the runner user in incus-admin
+sg incus-admin -c "ci/e2e.sh runner report.json"
+```
+
+`ci/dev.sh [runner|vm]` does the same locally, inside an Incus VM shaped like the GitHub runner
+(Ubuntu 24.04, 4 CPUs, 16 GiB, the worktree mounted read-only at `/src`). The VM is kept between
+runs; `incus delete -f bencher-dev` resets it. The `vm` leg needs nested virtualisation on the
+host.
+
+`mergeable` is the one required status check on `main`; it needs both `check` and `run`. Open PRs
+as drafts; CI runs when a PR is marked ready, or on demand with `workflow_dispatch`.

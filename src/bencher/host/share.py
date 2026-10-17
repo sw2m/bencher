@@ -32,7 +32,7 @@ class Share:
             shutil.copytree(states, self.path / "states")
 
     def runner(self, tree: Path) -> None:
-        shutil.copytree(tree, self.path / "runner", symlinks=True)
+        shutil.copytree(tree, self.path / "runner")
 
     def artifacts(self, root: Path, bench: Bench) -> dict[str, str]:
         (self.inputs / "artifacts").mkdir(parents=True)

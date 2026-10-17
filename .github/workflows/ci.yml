@@ -9,13 +9,14 @@ on:
       - synchronize
       - reopened
       - ready_for_review
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   check:
-    if: github.event.pull_request.draft == false
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -26,13 +27,36 @@ jobs:
           restore-prefixes-first-match: nix-${{ runner.os }}-
       - run: nix flake check --no-update-lock-file -L
 
+  # A full run of the in-repo consumer and runner; ci/dev.sh runs the same steps locally
+  run:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - runner
+          - vm
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: sudo ci/setup.sh "$USER"
+      - run: sg incus-admin -c "ci/e2e.sh ${{ matrix.runner }} $RUNNER_TEMP/report.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: report-${{ matrix.runner }}
+          path: ${{ runner.temp }}/report.json
+          if-no-files-found: ignore
+
   # The one status to mark required
   mergeable:
     needs:
       - check
+      - run
     if: always() # report on drafts too, so the status is never stuck "expected"
     runs-on: ubuntu-latest
     steps:
       - run: |
-          echo "check=${{ needs.check.result }}"
+          echo "check=${{ needs.check.result }} run=${{ needs.run.result }}"
           [ "${{ needs.check.result }}" = success ]
+          [ "${{ needs.run.result }}" = success ]
