@@ -1,0 +1,71 @@
+{%- set bencher = pillar["bencher"] -%}
+[agent]
+  interval = {{ bencher.telemetry.interval | tojson }}
+  flush_interval = {{ bencher.telemetry.interval | tojson }}
+  round_interval = true
+  omit_hostname = true
+  metric_buffer_limit = 1000000
+
+[[outputs.influxdb]]
+  urls = ["http://127.0.0.1:8428"]
+  database = "bencher"
+  skip_database_creation = true
+
+[[processors.rename]]
+  namepass = ["procstat*"]
+  [[processors.rename.replace]]
+    tag = "filter"
+    dest = "reporter"
+{% if bencher.reporters %}
+[[inputs.procstat]]
+  tag_with = ["pid"]
+  properties = ["cpu", "memory"]
+  pid_finder = "native"
+  fieldexclude = ["cmdline", "user", "status", "created_at", "ppid"]
+{%- for name in bencher.reporters %}
+  [[inputs.procstat.filter]]
+    name = {{ name | tojson }}
+    pid_files = [{{ ("/run/bencher/reporters/" ~ name ~ ".pid") | tojson }}]
+    recursion_depth = -1
+{%- endfor %}
+{% endif %}
+[[inputs.cpu]]
+  percpu = false
+  totalcpu = true
+  [inputs.cpu.tags]
+    reporter = "system"
+
+[[inputs.mem]]
+  [inputs.mem.tags]
+    reporter = "system"
+
+[[inputs.diskio]]
+  [inputs.diskio.tagdrop]
+    name = ["loop*", "ram*"]
+  [inputs.diskio.tags]
+    reporter = "system"
+
+[[inputs.net]]
+  ignore_protocol_stats = true
+  [inputs.net.tags]
+    reporter = "system"
+
+[[inputs.netstat]]
+  [inputs.netstat.tags]
+    reporter = "system"
+
+[[inputs.nstat]]
+  [inputs.nstat.tags]
+    reporter = "system"
+
+[[inputs.kernel]]
+  [inputs.kernel.tags]
+    reporter = "system"
+
+[[inputs.system]]
+  [inputs.system.tags]
+    reporter = "system"
+
+[[inputs.socket_listener]]
+  service_address = "udp://127.0.0.1:8094"
+  data_format = "influx"

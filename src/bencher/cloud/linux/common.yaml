@@ -1,0 +1,78 @@
+write_files:
+  - path: /etc/salt/minion.d/bencher.conf
+    content: |
+      file_client: local
+      file_roots:
+        base:
+          - /var/lib/bencher/states
+          - /var/lib/bencher/runner/salt
+      pillar_roots:
+        base:
+          - /var/lib/bencher/in/pillar
+      grains:
+        bencher:
+          inputs: /var/lib/bencher/in
+  - path: /etc/bencher/env
+    content: |
+      BENCHER_IN=/var/lib/bencher/in
+      BENCHER_REPORTERS=/run/bencher/reporters
+      BENCHER_PUSH_UDP=127.0.0.1:8094
+      BENCHER_PUSH_HTTP=http://127.0.0.1:8428
+  - path: /usr/local/bin/bencher-agent
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      set -eu
+      entry=/var/lib/bencher/runner/run
+      case "${1:-}" in
+        wait) exec cloud-init status --wait ;;
+        log) exec cat /var/log/cloud-init-output.log ;;
+        flush) exec systemctl stop telegraf.service ;;
+        run)
+          [ -x "$entry" ] || { echo "bencher: $entry is not an executable entrypoint" >&2; exit 2; }
+          status=0
+          systemd-run --quiet --pipe --wait --collect --service-type=exec --unit=bencher-run \
+            --property=Slice=bench.slice \
+            --property=RuntimeMaxSec="$2" \
+            --property=EnvironmentFile=/etc/bencher/env \
+            --working-directory=/var/lib/bencher/runner \
+            "$entry" || status=$?
+          # Incus reports exec exits 126/127 as errors and drops the code
+          case "$status" in 126|127) status=$((status + 100)) ;; esac
+          exit "$status" ;;
+        *) echo "usage: bencher-agent wait|log|flush|run <seconds>" >&2; exit 2 ;;
+      esac
+  - path: /etc/systemd/system/victoria-metrics.service.d/bencher.conf
+    content: |
+      [Service]
+      Slice=bencher.slice
+      ExecStart=
+      ExecStart=/usr/bin/victoria-metrics -storageDataPath=/var/lib/victoria-metrics -httpListenAddr=:8428 -retentionPeriod=1d -loggerLevel=WARN
+  - path: /etc/systemd/system/telegraf.service.d/bencher.conf
+    content: |
+      [Service]
+      Slice=bencher.slice
+      User=root
+      ExecStart=
+      ExecStart=/usr/bin/telegraf --config /var/lib/bencher/telegraf.conf
+  - path: /etc/systemd/system/bencher.slice
+    content: |
+      [Unit]
+      Description=bencher telemetry: Telegraf and VictoriaMetrics
+  - path: /etc/systemd/system/bench.slice
+    content: |
+      [Unit]
+      Description=bencher benchmark: the entrypoint and everything it starts
+
+runcmd:
+  - set -e
+  - systemctl disable --now telegraf.service victoria-metrics.service
+  - timeout 600 sh -c 'until [ -d /bencher/run/runner ]; do sleep 1; done'
+  - rm -rf /var/lib/bencher && mkdir -p /var/lib/bencher && cp -a /bencher/run/. /var/lib/bencher/
+  - set -- $(python3 -c 'import os; print(*sorted(os.sched_getaffinity(0)))')
+  - '[ "$#" -ge 2 ] || { echo "bencher: telemetry fencing needs 2 CPUs, the instance has $#"; exit 1; }'
+  - systemctl daemon-reload
+  - systemctl set-property --runtime bencher.slice "AllowedCPUs=$1"
+  - shift && systemctl set-property --runtime bench.slice "AllowedCPUs=$(echo "$@" | tr ' ' ',')"
+  - if [ -f /var/lib/bencher/runner/salt/runner.sls ]; then salt-call --local --retcode-passthrough --state-output=changes state.apply runner; fi
+  - salt-call --local --retcode-passthrough --state-output=changes state.apply bencher
