@@ -34,12 +34,10 @@ class Share:
                 shutil.copy2(source, target)
             artifacts[name] = f"{local}/in/artifacts/{name}"
         (inputs / "params.json").write_bytes(pydantic_core.to_json(bench.params) + b"\n")
-        (inputs / "pins.json").write_bytes(pydantic_core.to_json(bench.pins) + b"\n")
         milliseconds = int(bench.telemetry.interval.total_seconds() * 1000)
         pillar: dict[str, Any] = {
             "bencher": {
                 "params": bench.params,
-                "pins": bench.pins,
                 "artifacts": artifacts,
                 "reporters": runner.reporters,
                 "telemetry": {"interval": f"{milliseconds}ms"},

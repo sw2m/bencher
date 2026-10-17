@@ -22,7 +22,6 @@ class Bench(Model):
     limits: Limits
     telemetry: Telemetry = Telemetry()
     params: dict[str, Any] = {}
-    pins: dict[str, str] = {}
     artifacts: dict[Name, str] = {}
 
     @classmethod

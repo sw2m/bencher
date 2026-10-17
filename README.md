@@ -16,13 +16,13 @@ Three kinds of repository take part in a benchmark:
 | --- | --- |
 | **bencher** (this repo) | the host orchestrator, the cloud-init layers (the runner's base: Salt, Telegraf, VictoriaMetrics), every schema, statistics, expectation evaluation |
 | **fixture repo** (e.g. `sw2m/pdbd-bench`) | runners: an image, Salt states, an entrypoint, declared reporters |
-| **consumer** (e.g. `sw2m/pdbd`) | every decision: `bench.toml` (which bencher, which fixture runner, artifacts, params, pins, limits), `expect.tsv`, and the checkout of the fixture repo |
+| **consumer** (e.g. `sw2m/pdbd`) | every decision: `bench.toml` (which bencher, which fixture runner, artifacts, params, limits), `expect.tsv`, and the checkout of the fixture repo |
 
 Pins follow ownership. Everything bencher installs is pinned by package version in its cloud
 layers and verified by the vendor's signed repository. The fixture repo is pinned by the
 consumer's own checkout of it (a flake input in `flake.lock`, or a CI checkout at a ref);
 bencher only reads it from a path. Comparators inside a runner float unless the consumer pins
-them in `bench.toml`.
+them through a param the runner reads, by the runner's own convention (e.g. `[params.pins]`).
 
 ## A run
 
@@ -102,8 +102,7 @@ reach the states as pillar under `bencher`:
 
 | Pillar key | Source |
 | --- | --- |
-| `bencher:params` | `[params]` in `bench.toml` |
-| `bencher:pins` | `[pins]` in `bench.toml` |
+| `bencher:params` | `[params]` in `bench.toml`, free-form and unvalidated: the runner decides what it reads |
 | `bencher:artifacts` | artifact name → local path under `/var/lib/bencher/in/artifacts` |
 | `bencher:reporters` | `reporters` in `runner.toml` |
 | `bencher:telemetry:interval` | `[telemetry] interval` in `bench.toml` |
@@ -165,7 +164,7 @@ interval = "PT0.5S"
 [params]
 duration = "30s"
 
-[pins]
+[params.pins]
 pppd = "2.5.2"
 
 [artifacts]
@@ -199,7 +198,7 @@ remotes, or a local alias. Images must carry cloud-init and, for VMs, incus-agen
 
 | Env | Value |
 | --- | --- |
-| `BENCHER_IN` | `/var/lib/bencher/in`: `params.json`, `pins.json`, `artifacts/` |
+| `BENCHER_IN` | `/var/lib/bencher/in`: `params.json`, `artifacts/` |
 | `BENCHER_REPORTERS` | where to write `<reporter>.pid` |
 | `BENCHER_PUSH_UDP`, `BENCHER_PUSH_HTTP` | the push endpoints above |
 
