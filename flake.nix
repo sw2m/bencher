@@ -27,12 +27,12 @@
         pyproject = true;
         src = self;
         build-system = [ (python pkgs).pkgs.setuptools ];
-        dependencies = with (python pkgs).pkgs; [ pyincusd pydantic ];
+        dependencies = with (python pkgs).pkgs; [ pyincusd pydantic pydantic-settings ];
         makeWrapperArgs = [ "--prefix" "PATH" ":" (pkgs.lib.makeBinPath [ pkgs.git ]) ];
         pythonImportsCheck = [ "bencher.cli" ];
       };
       tools = pkgs: [
-        ((python pkgs).withPackages (p: with p; [ pyincusd pydantic mypy ]))
+        ((python pkgs).withPackages (p: with p; [ pyincusd pydantic pydantic-settings mypy ]))
         pkgs.ruff
         pkgs.git
       ];

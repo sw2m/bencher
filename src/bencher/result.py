@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 
@@ -80,6 +80,7 @@ class Error(Model):
 
 class Report(Model):
     passed: bool = Field(alias="pass")
+    overrides: dict[str, Any] = {}
     rows: list[Line] = []
     system: dict[str, Series] = {}
     expectations: list[Outcome] = []

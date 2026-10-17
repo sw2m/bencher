@@ -43,8 +43,8 @@ including when a stage fails; its `errors` say which stage.
 
 ## Sandbox
 
-Incus through [pyincusd](https://github.com/sw2m/pyincusd), over the local unix socket
-(`INCUS_SOCKET`, else the Incus and LXD default sockets in turn). A runner declares whether it
+Incus through [pyincusd](https://github.com/sw2m/pyincusd), over the local unix socket (the
+`socket` setting, else the Incus and LXD default sockets in turn). A runner declares whether it
 is a `container` or a `vm`; everything else about the run is identical between the two.
 
 Each instance gets:
@@ -204,6 +204,7 @@ remotes, or a local alias or fingerprint.
 ```json
 {
   "pass": true,
+  "overrides": {},
   "rows": [
     {"name": "throughput", "tags": {"pair": "linkup.pppd"}, "reporter": "linkup",
      "samples": {"Mbit/s": [141.2, 139.8, 142.0]},
@@ -225,6 +226,8 @@ remotes, or a local alias or fingerprint.
 }
 ```
 
+- `overrides` is every `--set` applied to `bench.toml` for this run, as dotted key → value. A
+  consumer CI can refuse a report whose `overrides` isn't empty.
 - `stats.ci` is the distribution-free 95% confidence interval of the median, `null` below six
   samples.
 - `telemetry` keys are VictoriaMetrics metric names, with any distinguishing labels as
@@ -272,8 +275,31 @@ nix run github:sw2m/bencher/<ref> -- bless crates/mux/bench --report report.json
 nix run github:sw2m/bencher/<ref> -- schema report
 ```
 
-`--keep` leaves the instance running for inspection. Downloads and fixture checkouts are
-cached under `BENCHER_CACHE` (default `$XDG_CACHE_HOME/bencher`).
+### Operator settings
+
+How this machine runs bencher, layered: a flag beats an environment variable, which beats the
+user config file, which beats the default.
+
+| Setting | Flag | Env | Default |
+| --- | --- | --- | --- |
+| `socket` | `--socket` | `BENCHER_SOCKET`, then `INCUS_SOCKET` | the Incus and LXD default sockets |
+| `cache` | `--cache` | `BENCHER_CACHE` | `$XDG_CACHE_HOME/bencher` |
+| `keep` | `--keep` | `BENCHER_KEEP` | `false`: delete the instance after the run |
+| `out` | `--out` | `BENCHER_OUT` | stdout |
+
+The config file is `$XDG_CONFIG_HOME/bencher/config.toml` (or `BENCHER_CONFIG`), with the same
+keys at the top level. Unknown keys are an error.
+
+### Overrides
+
+`bench.toml` is the consumer's reviewed decision and is not layered. `--set <dotted.key>=<value>`
+(repeatable, on `run` and `validate`) overrides one value for one invocation; the value is
+parsed as TOML, falling back to a plain string. Every override is recorded in the report's
+`overrides`, so a run that didn't use the committed configuration is always visible.
+
+```sh
+bencher run crates/mux/bench --set limits.cpu=8 --set params.duration='"10s"'
+```
 
 ## Development
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,27 @@ class Bench(Model):
     artifacts: dict[Name, str] = {}
 
     @classmethod
-    def load(cls, root: Path) -> Bench:
+    def load(cls, root: Path, overrides: dict[str, Any]) -> Bench:
         with (root / "bench.toml").open("rb") as file:
-            return cls.model_validate(tomllib.load(file))
+            data = tomllib.load(file)
+        for path, value in overrides.items():
+            *parents, leaf = path.split(".")
+            node = data
+            for part in parents:
+                child = node.setdefault(part, {})
+                if not isinstance(child, dict):
+                    raise ValueError(f"--set {path}: {part} is not a table")
+                node = child
+            node[leaf] = value
+        return cls.model_validate(data)
+
+
+def override(text: str) -> tuple[str, Any]:
+    path, sep, raw = text.partition("=")
+    if not sep or not re.fullmatch(r"[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*", path):
+        raise ValueError(f"--set {text!r}: expected <dotted.key>=<value>")
+    try:
+        value = tomllib.loads(f"value = {raw}")["value"]
+    except tomllib.TOMLDecodeError:
+        value = raw
+    return path, value

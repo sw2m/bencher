@@ -5,16 +5,18 @@ import asyncio
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel
 
 from bencher import payload
-from bencher.bench import Bench
+from bencher.bench import Bench, override
 from bencher.expect import Rules
 from bencher.model import explain
 from bencher.result import Report, Result
 from bencher.run import Plan, Run, arch
 from bencher.runner import Runner
+from bencher.settings import Settings
 
 schemas: dict[str, type[BaseModel]] = {
     "bench": Bench,
@@ -24,18 +26,28 @@ schemas: dict[str, type[BaseModel]] = {
 }
 
 
+def settings(args: argparse.Namespace) -> Settings:
+    flags = {name: getattr(args, name, None) for name in ("socket", "cache", "keep", "out")}
+    return Settings.layered(flags)
+
+
+def overrides(args: argparse.Namespace) -> dict[str, Any]:
+    return dict(override(text) for text in args.set)
+
+
 def run(args: argparse.Namespace) -> int:
-    report = asyncio.run(Run(args.dir, keep=args.keep).start())
+    chosen = settings(args)
+    report = asyncio.run(Run(args.dir, chosen, overrides(args)).start())
     text = report.dump()
-    if args.out:
-        Path(args.out).write_text(text)
+    if chosen.out:
+        chosen.out.write_text(text)
     else:
         sys.stdout.write(text)
     return 0 if report.passed else 1
 
 
 def validate(args: argparse.Namespace) -> int:
-    plan = Plan.load(args.dir.resolve())
+    plan = Plan.load(args.dir.resolve(), settings(args), overrides(args))
     payload.components(plan.runner.os, arch())
     count = len(plan.rules.rules) if plan.rules else 0
     print(
@@ -59,14 +71,26 @@ def schema(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    operator = argparse.ArgumentParser(add_help=False)
+    operator.add_argument("--socket", help="Incus or LXD unix socket")
+    operator.add_argument("--cache", type=Path, help="download, fixture and run cache")
+    operator.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="override a bench.toml value (recorded in the report)",
+    )
     parser = argparse.ArgumentParser(prog="bencher")
     verbs = parser.add_subparsers(dest="verb", required=True)
-    p = verbs.add_parser("run", help="run a benchmark and write its report")
+    p = verbs.add_parser("run", parents=[operator], help="run a benchmark and write its report")
     p.add_argument("dir", type=Path)
-    p.add_argument("--out", help="write the report here instead of stdout")
-    p.add_argument("--keep", action="store_true", help="leave the instance running")
+    p.add_argument("--out", type=Path, help="write the report here instead of stdout")
+    p.add_argument("--keep", action="store_true", default=None, help="leave the instance running")
     p.set_defaults(handler=run)
-    p = verbs.add_parser("validate", help="check bench.toml, the fixture runner and expect.tsv")
+    p = verbs.add_parser(
+        "validate", parents=[operator], help="check bench.toml, the fixture runner and expect.tsv"
+    )
     p.add_argument("dir", type=Path)
     p.set_defaults(handler=validate)
     p = verbs.add_parser("bless", help="snapshot verdict rows of a report into expect.tsv")

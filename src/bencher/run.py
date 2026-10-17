@@ -11,11 +11,11 @@ from dataclasses import dataclass
 from importlib import resources
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 from pydantic import ValidationError
 
-from bencher import cache, fixture, payload
+from bencher import fixture, payload
 from bencher.bench import Bench
 from bencher.expect import Rules
 from bencher.guest import Guest, find
@@ -23,6 +23,7 @@ from bencher.incus import Exec, Failure, Incus
 from bencher.model import explain, seconds
 from bencher.result import Error, Line, Report, Result, Stage
 from bencher.runner import Runner
+from bencher.settings import Settings
 from bencher.stats import Stats
 from bencher.telemetry import Series, fold, parse
 
@@ -63,10 +64,12 @@ class Plan:
     guest: Guest
     rules: Rules | None
 
+    overrides: dict[str, Any]
+
     @classmethod
-    def load(cls, root: Path) -> Plan:
-        bench = Bench.load(root)
-        tree = fixture.fetch(bench.fixture, root, cache.root())
+    def load(cls, root: Path, settings: Settings, overrides: dict[str, Any]) -> Plan:
+        bench = Bench.load(root, overrides)
+        tree = fixture.fetch(bench.fixture, root, settings.cache)
         runner = Runner.load(tree)
         guest = find(runner.os)
         entry = tree / "run"
@@ -75,13 +78,20 @@ class Plan:
         for name, path in bench.artifacts.items():
             if not (root / path).exists():
                 raise Halt(f"artifact {name}: {root / path} does not exist")
-        return cls(bench, runner, tree, guest, Rules.load(root))
+        return cls(bench, runner, tree, guest, Rules.load(root), overrides)
 
 
 class Run:
-    def __init__(self, root: Path, keep: bool, log: TextIO = sys.stderr) -> None:
+    def __init__(
+        self,
+        root: Path,
+        settings: Settings,
+        overrides: dict[str, Any],
+        log: TextIO = sys.stderr,
+    ) -> None:
         self.root = root.resolve()
-        self.keep = keep
+        self.settings = settings
+        self.overrides = overrides
         self.log = log
         self.name = f"bencher-{uuid.uuid4().hex[:12]}"
         self.errors: list[Error] = []
@@ -197,6 +207,7 @@ class Run:
         passed = not self.errors and all(o.passed for o in outcomes)
         return Report(
             passed=passed,
+            overrides=self.overrides,
             rows=lines,
             system=telemetry.get("system", {}),
             expectations=outcomes,
@@ -207,20 +218,20 @@ class Run:
         message = explain(error)
         self.say(f"{stage}: {message}")
         self.errors.append(Error(stage=stage, message=message))
-        return Report(passed=False, errors=self.errors)
+        return Report(passed=False, overrides=self.overrides, errors=self.errors)
 
     async def start(self) -> Report:
         stage: Stage = "load"
         try:
-            plan = Plan.load(self.root)
+            plan = Plan.load(self.root, self.settings, self.overrides)
             stage = "payload"
             self.say(f"payload for {plan.runner.os}/{arch()}")
-            bundle = payload.prepare(plan.runner.os, arch(), cache.root())
+            bundle = payload.prepare(plan.runner.os, arch(), self.settings.cache)
             stage = "launch"
-            incus = Incus()
+            incus = Incus(self.settings.socket)
         except Exception as error:
             return self.fail(stage, error)
-        share = cache.root() / "runs" / self.name
+        share = self.settings.cache / "runs" / self.name
         try:
             self.stage(plan, share)
         except Exception as error:
@@ -271,7 +282,7 @@ class Run:
             await self.teardown(incus, share)
 
     async def teardown(self, incus: Incus, share: Path) -> None:
-        if self.keep:
+        if self.settings.keep:
             self.say(f"kept {self.name}; share at {share}")
         else:
             try:

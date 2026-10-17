@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from dataclasses import dataclass
@@ -29,13 +28,13 @@ remotes = {
 }
 
 
-def socket() -> str:
-    if override := os.environ.get("INCUS_SOCKET"):
-        return override
+def socket(chosen: str | None) -> str:
+    if chosen:
+        return chosen
     for path in sockets:
         if Path(path).exists():
             return path
-    raise FileNotFoundError("no Incus or LXD socket found; set INCUS_SOCKET")
+    raise FileNotFoundError("no Incus or LXD socket found; set BENCHER_SOCKET or --socket")
 
 
 def source(image: str) -> InstanceSource:
@@ -74,8 +73,8 @@ def reason(error: ApiException) -> str:
 
 
 class Incus:
-    def __init__(self) -> None:
-        self.client = Client(socket_path=socket())
+    def __init__(self, chosen: str | None) -> None:
+        self.client = Client(socket_path=socket(chosen))
         self.instances = InstancesApi(self.client)
         self.operations = OperationsApi(self.client)
 
