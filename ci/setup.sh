@@ -3,7 +3,7 @@ set -eu
 user=$1
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
-apt-get install -y -q incus
+apt-get install -y -q incus qemu-system-x86 ovmf
 incus admin init --minimal
 usermod -aG incus-admin "$user"
 # see https://linuxcontainers.org/incus/docs/main/howto/network_bridge_firewalld/#prevent-connectivity-issues-with-incus-and-docker
