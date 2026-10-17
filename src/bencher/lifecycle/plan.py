@@ -7,7 +7,6 @@ from bencher.contract.input.bench import Bench
 from bencher.contract.input.override import Override
 from bencher.contract.input.runner import Runner
 from bencher.expect.rules import Rules
-from bencher.host.clone import Clone
 from bencher.lifecycle.halt import Halt
 
 
@@ -21,9 +20,9 @@ class Plan:
     overrides: list[Override]
 
     @classmethod
-    def load(cls, root: Path, cache: Path, overrides: list[Override]) -> Plan:
+    def load(cls, root: Path, overrides: list[Override]) -> Plan:
         bench = Bench.load(root, overrides)
-        tree = Clone(bench.fixture, root, cache).fetch()
+        tree = bench.fixture.locate(root)
         runner = Runner.load(tree)
         for name, path in bench.artifacts.items():
             if not (root / path).exists():

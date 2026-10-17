@@ -21,8 +21,7 @@
           };
         };
       };
-      runtime = p: with p; [ deepmerge httpx pydantic pydantic-settings pygit2 pyincusd pyyaml scipy ];
-      bundle = pkgs: "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+      runtime = p: with p; [ deepmerge httpx pydantic pydantic-settings pyincusd pyyaml scipy ];
       bencher = pkgs: (python pkgs).pkgs.buildPythonApplication {
         pname = "bencher";
         version = "0.1.0";
@@ -30,7 +29,6 @@
         src = self;
         build-system = [ (python pkgs).pkgs.setuptools ];
         dependencies = runtime (python pkgs).pkgs;
-        makeWrapperArgs = [ "--set-default" "SSL_CERT_FILE" (bundle pkgs) ];
         pythonImportsCheck = [ "bencher.cli.bencher" ];
       };
       tools = pkgs: [
@@ -59,7 +57,6 @@
           touch $out
         '';
         cloud = pkgs.runCommand "cloud" { nativeBuildInputs = tools pkgs ++ [ pkgs.cloud-init ]; } ''
-          export SSL_CERT_FILE=${bundle pkgs}
           PYTHONPATH=${self}/src python - "$TMPDIR/rendered" <<'EOF'
           import sys
           from pathlib import Path

@@ -20,7 +20,7 @@ class Lint(Verb):
 
     def perform(self, settings: Settings) -> int:
         overrides = [Override.parse(text) for text in self.overrides]
-        plan = Plan.load(self.dir.resolve(), settings.cache, overrides)
+        plan = Plan.load(self.dir.resolve(), overrides)
         count = len(plan.rules.rules) if plan.rules else 0
         print(f"bencher: {self.dir}: ok ({plan.runner.type}, {count} rules)", file=sys.stderr)
         return 0

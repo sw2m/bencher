@@ -16,17 +16,19 @@ Three kinds of repository take part in a benchmark:
 | --- | --- |
 | **bencher** (this repo) | the host orchestrator, the cloud-init layers (the runner's base: Salt, Telegraf, VictoriaMetrics), every schema, statistics, expectation evaluation |
 | **fixture repo** (e.g. `sw2m/pdbd-bench`) | runners: an image, Salt states, an entrypoint, declared reporters |
-| **consumer** (e.g. `sw2m/pdbd`) | every decision: `bench.toml` (which bencher, which fixture runner, artifacts, params, pins, limits) and `expect.tsv` |
+| **consumer** (e.g. `sw2m/pdbd`) | every decision: `bench.toml` (which bencher, which fixture runner, artifacts, params, pins, limits), `expect.tsv`, and the checkout of the fixture repo |
 
 Pins follow ownership. Everything bencher installs is pinned by package version in its cloud
-layers and verified by the vendor's signed repository. Comparators inside a runner float
-unless the consumer pins them in `bench.toml`.
+layers and verified by the vendor's signed repository. The fixture repo is pinned by the
+consumer's own checkout of it (a flake input in `flake.lock`, or a CI checkout at a ref);
+bencher only reads it from a path. Comparators inside a runner float unless the consumer pins
+them in `bench.toml`.
 
 ## A run
 
 ```
 bencher run <bench dir>
-  1. load       bench.toml (+ --set), fetch the fixture at its ref, load runner.toml and expect.tsv
+  1. load       bench.toml (+ --set), locate the fixture runner, load runner.toml and expect.tsv
   2. launch     create the Incus instance stopped, with the run share; read the image's os/release
   3. stage      write the run share: bencher's Salt states, the runner, the consumer's inputs, pillar
   4. launch     compose the cloud-config for that os/release, set it as user-data, start
@@ -148,8 +150,7 @@ series over HTTP. Series of one reporter are summed across its processes.
 ref = "v0.1.0" # which bencher the consumer's CI runs
 
 [fixture]
-repo = "https://github.com/sw2m/pdbd-bench" # or: path = "../pdbd-bench"
-ref = "3f2a91c4e1d0b8a7c6f5e4d3c2b1a09f8e7d6c5b"
+path = "../../../bench" # the consumer's checkout of sw2m/pdbd-bench
 runner = "transport"
 
 [limits]
@@ -172,7 +173,9 @@ linkup = "../../result/bin/linkup"
 ```
 
 - Paths are relative to the bench directory.
-- `fixture.ref` is a branch, a tag or a full commit hash.
+- `fixture.path` is wherever the consumer puts its checkout of the fixture repo: a git submodule,
+  a CI checkout at a ref, or a symlink to a flake input. That checkout is the pin; bencher does
+  no fetching.
 - `limits.cpu` is at least 2: one CPU is fenced for telemetry. `limits.memory` is a byte size
   (`4GiB`, `4GB`, or bytes).
 - Durations are seconds, ISO 8601 (`PT30M`) or `HH:MM:SS`.

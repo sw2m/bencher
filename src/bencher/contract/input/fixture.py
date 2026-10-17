@@ -1,20 +1,18 @@
 from __future__ import annotations
 
-from pydantic import Field, model_validator
+from pathlib import Path
+
+from pydantic import Field
 
 from bencher.contract.model import Model
 
 
 class Fixture(Model):
-    repo: str | None = None
-    path: str | None = None
-    ref: str | None = None
+    path: str = Field(min_length=1)
     runner: str = Field(min_length=1)
 
-    @model_validator(mode="after")
-    def source(self) -> Fixture:
-        if (self.repo is None) == (self.path is None):
-            raise ValueError("fixture needs exactly one of repo or path")
-        if self.repo is not None and not self.ref:
-            raise ValueError("fixture.repo needs a ref")
-        return self
+    def locate(self, root: Path) -> Path:
+        tree = (root / self.path / self.runner).resolve()
+        if not tree.is_dir():
+            raise FileNotFoundError(f"fixture runner not found: {tree}")
+        return tree

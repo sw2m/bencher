@@ -7,7 +7,6 @@ dependencies = [
   "httpx>=0.27",
   "pydantic>=2",
   "pydantic-settings>=2.3",
-  "pygit2>=1.15",
   "pyincusd>=7.5.1",
   "pyyaml>=6",
   "scipy>=1.11",

@@ -47,7 +47,7 @@ class Run:
         cls, root: Path, settings: Settings, keep: bool, overrides: list[Override]
     ) -> Report:
         try:
-            plan = Plan.load(root.resolve(), settings.cache, overrides)
+            plan = Plan.load(root.resolve(), overrides)
         except Exception as error:
             message = Reason.of(error)
             print(f"bencher: load: {message}", file=sys.stderr, flush=True)
