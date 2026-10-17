@@ -91,7 +91,20 @@ put both telemetry services in `bencher.slice`, and run:
    chosen by Incus per instance);
 4. `salt-call --local state.apply runner`, then `state.apply bencher`.
 
-bencher waits on `cloud-init status --wait`; an error prints `/var/log/cloud-init-output.log`.
+### The guest agent
+
+The layers also install the guest's whole interface to the host: `/etc/bencher/env` (the
+entrypoint's environment) and one command, `bencher-agent`, which the host drives through
+`incus exec`:
+
+| Command | Does |
+| --- | --- |
+| `bencher-agent wait` | blocks until provisioning finishes (`cloud-init status --wait`) |
+| `bencher-agent log` | prints the provisioning output, shown when provisioning fails |
+| `bencher-agent run <seconds>` | runs the entrypoint in `bench.slice` with `/etc/bencher/env`, killed after `<seconds>`; its stdout is the result |
+| `bencher-agent flush` | stops the collector, which makes its final gather and flush |
+
+Every OS family's layers provide the same `bencher-agent`, so the host carries no per-family code.
 
 ## Salt
 
@@ -103,7 +116,7 @@ reach the states as pillar under `bencher`:
 | Pillar key | Source |
 | --- | --- |
 | `bencher:params` | `[params]` in `bench.toml`, free-form and unvalidated: the runner decides what it reads |
-| `bencher:artifacts` | artifact name → local path under `/var/lib/bencher/in/artifacts` |
+| `bencher:artifacts` | artifact name → its path in the guest, resolved from the `bencher:inputs` grain the layers set |
 | `bencher:reporters` | `reporters` in `runner.toml` |
 | `bencher:telemetry:interval` | `[telemetry] interval` in `bench.toml` |
 
@@ -134,8 +147,8 @@ must carry a declared `reporter` tag; any other series fails the run at `harvest
 | `BENCHER_PUSH_UDP` | Influx line protocol over UDP, through Telegraf | flushed each interval |
 | `BENCHER_PUSH_HTTP` | VictoriaMetrics ingestion (`/write`, `/api/v1/import/prometheus`) | straight to the store |
 
-**Harvest** happens after the entrypoint exits: Telegraf is stopped through exec (a final gather
-and flush), then the host flushes VictoriaMetrics (`/internal/force_flush`) and exports every
+**Harvest** happens after the entrypoint exits: `bencher-agent flush` stops Telegraf (a final
+gather and flush), then the host flushes VictoriaMetrics (`/internal/force_flush`) and exports every
 series over HTTP. Series of one reporter are summed across its processes.
 
 ## Contracts
@@ -194,7 +207,8 @@ remotes, or a local alias. Images must carry cloud-init and, for VMs, incus-agen
 
 ### The entrypoint
 
-`/var/lib/bencher/runner/run`, executed from its directory in `bench.slice`, with:
+`/var/lib/bencher/runner/run`, started by `bencher-agent run` from its directory in `bench.slice`,
+with the environment in `/etc/bencher/env`:
 
 | Env | Value |
 | --- | --- |
@@ -205,7 +219,9 @@ remotes, or a local alias. Images must carry cloud-init and, for VMs, incus-agen
 - **stdout** is the result and nothing else. Anything that is not one result document fails
   validation.
 - **stderr** is the log; bencher echoes it to its own stderr.
-- **exit status** non-zero is a runner error; stdout is then ignored.
+- **exit status** non-zero is a runner error; stdout is then ignored. Incus turns an exec's 126
+  and 127 into its own errors, so `bencher-agent` reports an entrypoint's 126/127 as 226/227, and
+  a missing or non-executable entrypoint as 2.
 
 ### Result (entrypoint stdout)
 
@@ -287,10 +303,10 @@ hand.
 
 ## Operating systems
 
-The guest side is a table keyed by OS family (paths, the provisioning wait, the entrypoint
-command, the collector stop) plus the family's cloud layers. **Linux** (Debian bookworm) is
-wired. **Windows** (Cloudbase-Init, a virtiofs automounter service, `run.ps1`) and **BSD**
-(cloud-init, a 9p or virtiofs client) are paved by the same table, layers and contracts, and
+An OS family is wired when it has cloud layers, and those layers provide `bencher-agent` and
+`/etc/bencher/env` (or their family's equivalents). **Linux** (Debian bookworm) is wired.
+**Windows** (Cloudbase-Init, a virtiofs automounter service, a PowerShell `bencher-agent`) and
+**BSD** (cloud-init, a 9p or virtiofs client) are paved by the same layers and contracts, and
 fail at `launch` until wired (#3).
 
 ## Usage

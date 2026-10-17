@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 import uuid
 from pathlib import Path
@@ -17,7 +16,6 @@ from bencher.contract.output.report import Report
 from bencher.contract.output.result import Result
 from bencher.contract.output.stage import Stage
 from bencher.contract.reason import Reason
-from bencher.guest.guest import Guest
 from bencher.host.failure import Failure
 from bencher.host.incus import Incus
 from bencher.host.settings import Settings
@@ -65,7 +63,7 @@ class Run:
         self.say(f"{stage}: {message}")
         self.errors.append(Error(stage=stage, message=message))
 
-    async def create(self, incus: Incus) -> tuple[Guest, Target]:
+    async def create(self, incus: Incus) -> Target:
         plan = self.plan
         self.say(f"launch {self.name}: {plan.runner.type} {plan.runner.image}")
         self.share.path.mkdir(parents=True, exist_ok=True)
@@ -88,46 +86,46 @@ class Run:
             timeout=plan.bench.limits.provision.total_seconds(),
         )
         target = Target.of(plan.runner.type, await incus.config(self.name))
-        guest = Guest.find(target.family())
-        entry = plan.tree / guest.program
-        if not entry.is_file() or not os.access(entry, os.X_OK):
-            raise Halt(f"{entry} is not an executable entrypoint")
-        return guest, target
+        target.layers()
+        return target
 
     async def boot(self, incus: Incus, target: Target) -> None:
         self.say(f"cloud-init for {target.distro} {target.release}")
         await incus.configure(self.name, {"cloud-init.user-data": target.compose()})
         await incus.state(self.name, "start", 300)
 
-    async def provision(self, incus: Incus, guest: Guest) -> None:
+    async def provision(self, incus: Incus) -> None:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.plan.bench.limits.provision.total_seconds()
         while loop.time() < deadline:
             try:
-                done = await incus.exec(self.name, guest.wait(), deadline - loop.time())
+                done = await incus.exec(
+                    self.name, ["bencher-agent", "wait"], deadline - loop.time()
+                )
             except Failure:
                 await asyncio.sleep(2)
                 continue
             if done.code == 0:
                 return
             if done.code == 1:
-                await self.dump(incus, guest)
+                await self.dump(incus)
                 raise Halt("cloud-init reported an error; see its output above")
             await asyncio.sleep(2)
-        await self.dump(incus, guest)
+        await self.dump(incus)
         raise Halt(f"provisioning did not finish within {self.plan.bench.limits.provision}")
 
-    async def dump(self, incus: Incus, guest: Guest) -> None:
+    async def dump(self, incus: Incus) -> None:
         try:
-            done = await incus.exec(self.name, guest.log(), 60)
+            done = await incus.exec(self.name, ["bencher-agent", "log"], 60)
         except Failure as error:
             self.say(f"cloud-init output unavailable: {error}")
             return
         self.log.write(done.stdout.decode(errors="replace"))
 
-    async def execute(self, incus: Incus, guest: Guest) -> Result:
+    async def execute(self, incus: Incus) -> Result:
         limit = self.plan.bench.limits.run
-        done = await incus.exec(self.name, guest.run(limit), limit.total_seconds() + 120)
+        seconds = int(limit.total_seconds())
+        done = await incus.exec(self.name, ["bencher-agent", "run", str(seconds)], seconds + 120)
         self.log.write(done.stderr.decode(errors="replace"))
         if done.code != 0:
             raise Halt(f"entrypoint exited {done.code}")
@@ -141,8 +139,8 @@ class Run:
                 raise Halt(f"row {row.name} {dict(row.tags)}: undeclared reporter {row.reporter!r}")
         return result
 
-    async def harvest(self, incus: Incus, guest: Guest) -> dict[str, dict[str, Series]]:
-        done = await incus.exec(self.name, guest.flush(), 120)
+    async def harvest(self, incus: Incus) -> dict[str, dict[str, Series]]:
+        done = await incus.exec(self.name, ["bencher-agent", "flush"], 120)
         if done.code != 0:
             raise Halt(f"stopping the collector exited {done.code}")
         base = f"http://{await incus.address(self.name)}:8428"
@@ -191,20 +189,20 @@ class Run:
             return self.failed()
         stage: Stage = "launch"
         try:
-            guest, target = await self.create(incus)
+            target = await self.create(incus)
             stage = "stage"
-            self.share.stage(plan.root, plan.bench, plan.runner, plan.tree, guest.local)
+            self.share.stage(plan.root, plan.bench, plan.runner, plan.tree)
             stage = "launch"
             await self.boot(incus, target)
             stage = "provision"
             self.say("provision")
-            await self.provision(incus, guest)
+            await self.provision(incus)
             stage = "execute"
             self.say("execute")
-            result = await self.execute(incus, guest)
+            result = await self.execute(incus)
             stage = "harvest"
             self.say("harvest")
-            telemetry = await self.harvest(incus, guest)
+            telemetry = await self.harvest(incus)
             stage = "report"
             return self.report(result, telemetry)
         except Exception as error:

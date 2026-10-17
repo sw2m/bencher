@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from pyincusd.api.instances_api import InstancesApi
 from pyincusd.api.operations_api import OperationsApi
 from pyincusd.exceptions import ApiException
 from pyincusd.local import Client
+from pyincusd.models.certificates_post202_response import CertificatesPost202Response
 from pyincusd.models.instance_exec_post import InstanceExecPost
 from pyincusd.models.instance_put import InstancePut
 from pyincusd.models.instance_source import InstanceSource
@@ -68,10 +70,15 @@ class Incus:
         while True:
             left = max(1, int(deadline - time.monotonic()))
             try:
-                done = await self.operations.operation_wait_get(ident, timeout=min(left, 60))
+                raw = await self.operations.operation_wait_get_without_preload_content(
+                    ident, timeout=min(left, 60)
+                )
+                envelope = json.loads(await raw.aread())
             except ApiException as error:
                 raise Failure.of(error) from None
-            op = done.metadata
+            if envelope.get("type") == "error":
+                raise Failure(f"Incus: {envelope.get('error')}")
+            op = CertificatesPost202Response.model_validate(envelope).metadata
             if op is None:
                 raise Failure(f"operation {ident} has no state")
             if op.status == "Success":

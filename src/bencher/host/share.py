@@ -17,12 +17,12 @@ class Share:
         self.path = path
         self.inputs = path / "in"
 
-    def stage(self, root: Path, bench: Bench, runner: Runner, tree: Path, local: str) -> None:
+    def stage(self, root: Path, bench: Bench, runner: Runner, tree: Path) -> None:
         self.remove()
         self.path.mkdir(parents=True)
         self.states()
         self.runner(tree)
-        artifacts = self.artifacts(root, bench, local)
+        artifacts = self.artifacts(root, bench)
         self.params(bench)
         self.pillar(bench, runner, artifacts)
         self.publish()
@@ -34,7 +34,7 @@ class Share:
     def runner(self, tree: Path) -> None:
         shutil.copytree(tree, self.path / "runner", symlinks=True)
 
-    def artifacts(self, root: Path, bench: Bench, local: str) -> dict[str, str]:
+    def artifacts(self, root: Path, bench: Bench) -> dict[str, str]:
         (self.inputs / "artifacts").mkdir(parents=True)
         placed = {}
         for name, path in bench.artifacts.items():
@@ -44,7 +44,7 @@ class Share:
                 shutil.copytree(source, target)
             else:
                 shutil.copy2(source, target)
-            placed[name] = f"{local}/in/artifacts/{name}"
+            placed[name] = "{{ grains.bencher.inputs }}/artifacts/" + name
         return placed
 
     def params(self, bench: Bench) -> None:
