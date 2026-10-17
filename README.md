@@ -77,14 +77,16 @@ that behaves the same under any init system. It is internal: overlays live only 
 runners provision through Salt.
 
 For Linux the layers install Salt (`salt-common`), Telegraf and VictoriaMetrics from their
-signed repositories at pinned versions, write the Salt minion config and the systemd drop-ins
-that put both telemetry services in `bencher.slice`, and run:
+signed repositories at pinned versions, write the Salt minion config, declare two slices
+(`bencher.slice` for telemetry, `bench.slice` for the benchmark), write the systemd drop-ins that
+put both telemetry services in `bencher.slice`, and run:
 
 1. stop the telemetry services, so provisioning isn't recorded;
 2. wait for the run share and copy it to local disk (`/var/lib/bencher`), so the measurement
    never touches a share;
-3. fence the CPUs: the first CPU of the instance's affinity goes to `bencher.slice` (telemetry),
-   the rest to `bench.slice` (the entrypoint and everything it starts);
+3. fence the CPUs: the first CPU of the instance's affinity goes to `bencher.slice`, the rest to
+   `bench.slice` (set at runtime with `systemctl set-property`, since a container's CPU ids are
+   chosen by Incus per instance);
 4. `salt-call --local state.apply runner`, then `state.apply bencher`.
 
 bencher waits on `cloud-init status --wait`; an error prints `/var/log/cloud-init-output.log`.

@@ -22,24 +22,24 @@ write_files:
       User=root
       ExecStart=
       ExecStart=/usr/bin/telegraf --config /var/lib/bencher/telegraf.conf
-  - path: /usr/local/libexec/bencher/fence.py
+  - path: /etc/systemd/system/bencher.slice
     content: |
-      import os
-      import subprocess
-      import sys
-
-      cpus = sorted(os.sched_getaffinity(0))
-      if len(cpus) < 2:
-          sys.exit(f"bencher: telemetry fencing needs 2 CPUs, the instance has {len(cpus)}")
-      for unit, group in {"bencher.slice": cpus[:1], "bench.slice": cpus[1:]}.items():
-          allowed = ",".join(str(cpu) for cpu in group)
-          subprocess.run(["systemctl", "set-property", "--runtime", unit, f"AllowedCPUs={allowed}"], check=True)
+      [Unit]
+      Description=bencher telemetry: Telegraf and VictoriaMetrics
+  - path: /etc/systemd/system/bench.slice
+    content: |
+      [Unit]
+      Description=bencher benchmark: the entrypoint and everything it starts
 
 runcmd:
   - set -e
   - systemctl disable --now telegraf.service victoria-metrics.service
   - timeout 600 sh -c 'until [ -d /bencher/run/runner ]; do sleep 1; done'
   - rm -rf /var/lib/bencher && mkdir -p /var/lib/bencher && cp -a /bencher/run/. /var/lib/bencher/
-  - python3 /usr/local/libexec/bencher/fence.py
+  - set -- $(python3 -c 'import os; print(*sorted(os.sched_getaffinity(0)))')
+  - '[ "$#" -ge 2 ] || { echo "bencher: telemetry fencing needs 2 CPUs, the instance has $#"; exit 1; }'
+  - systemctl daemon-reload
+  - systemctl set-property --runtime bencher.slice "AllowedCPUs=$1"
+  - shift && systemctl set-property --runtime bench.slice "AllowedCPUs=$(echo "$@" | tr ' ' ',')"
   - if [ -f /var/lib/bencher/runner/salt/runner.sls ]; then salt-call --local --retcode-passthrough --state-output=changes state.apply runner; fi
   - salt-call --local --retcode-passthrough --state-output=changes state.apply bencher
