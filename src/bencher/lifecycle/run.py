@@ -91,7 +91,8 @@ class Run:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.plan.bench.limits.provision.total_seconds()
         await agent.wait(deadline - loop.time())
-        await agent.step("provision", deadline - loop.time())
+        left = deadline - loop.time()
+        await agent.step("provision", str(int(left)), timeout=left)
 
     async def execute(self, agent: Agent) -> Result:
         done = await agent.run(int(self.plan.bench.limits.run.total_seconds()))

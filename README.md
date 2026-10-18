@@ -99,7 +99,7 @@ entrypoint's environment) and one command, `bencher-agent`, which the host drive
 | `bencher-agent wait` | blocks until cloud-init finishes (`cloud-init status --wait`) |
 | `bencher-agent log` | prints the cloud-init output, shown when it fails |
 | `bencher-agent clean` | resets cloud-init's state and empties the machine id before the image is published, so each instance gets its own id without systemd's first-boot presets re-enabling the telemetry services |
-| `bencher-agent provision` | waits for the run share and copies it to local disk (`/var/lib/bencher`), so the measurement never touches a share; fences the CPUs (the first CPU of the instance's affinity to `bencher.slice`, the rest to `bench.slice`, set at runtime with `systemctl set-property` since a container's CPU ids are chosen by Incus per instance); then `salt-call --local state.apply runner` and `state.apply bencher` |
+| `bencher-agent provision <seconds>` | waits up to `<seconds>` (the rest of `limits.provision`) for the run share and copies it to local disk (`/var/lib/bencher`), so the measurement never touches a share; fences the CPUs (the first CPU of the instance's affinity to `bencher.slice`, the rest to `bench.slice`, set at runtime with `systemctl set-property` since a container's CPU ids are chosen by Incus per instance); then `salt-call --local state.apply runner` and `state.apply bencher` |
 | `bencher-agent run <seconds>` | runs the entrypoint in `bench.slice` with `/etc/bencher/env`, killed after `<seconds>`; its stdout is the result |
 | `bencher-agent flush` | stops the collector, which makes its final gather and flush |
 
@@ -110,19 +110,36 @@ Every OS family's layers provide the same `bencher-agent`, so the host carries n
 A runner's image is formed once and reused. Forming (L0) launches the runner's `image` with the
 composed cloud-config, waits for cloud-init, runs `bencher-agent clean`, stops the instance and
 publishes it as the Incus image `bencher/<key>`; every run then launches from that image, so a
-run never repeats package installation. The key is a digest of the bencher version, the cloud
-layer tree, and the runner's `image` and `type`: any change to one forms a new image.
+run never repeats package installation. The key is a digest of the bencher version, bencher's
+whole package source (the cloud layers and the code that composes and forms them), and the
+runner's `image` and `type`: a change to any of these forms a new image. The key holds the
+`image` *name*, not what it currently points to: a floating alias such as
+`images:debian/12/cloud` is frozen at whatever it resolved to when the image was formed, until
+something in the key changes. That is the point of the cache (a stable base between runs), and
+the trade-off (an upstream rebuild doesn't reach a cached image). Delete `bencher/<key>` and its
+tarball to re-form.
 
 | Level | Where | Hit when |
 | --- | --- | --- |
-| L2 | the Incus image `bencher/<key>`, else `<cache>/images/<key>.tar` (imported) | this machine formed or fetched it before |
+| L2 | the Incus image `bencher/<key>`, else `<cache>/images/<key>.tar` (imported), checked against `<key>.sha256` beside it | this machine formed or fetched it before |
 | L1 | `<key>.tar` on the GitHub release `v<version>`, checked against the release's `manifest.json` | a release formed the same image and type |
 | L0 | formed locally, then exported to `<cache>/images/<key>.tar` | nothing else hits |
 
 L1 is whatever the release attached; a release without the key, or with no `manifest.json` at
-all, is a miss. A fetch that fails, or fails its digest, falls back to forming, and says why. A
-tarball is touched whenever it is used, which is what lets a cache drop the ones a run didn't
-need.
+all, is a miss. A fetch that fails, or fails its digest, falls back to forming, and says why. The
+digest guards against corruption, not tampering: the manifest comes from the same release as the
+tarball, so L1 trusts whoever can publish this repository's releases, exactly as running its
+code does.
+
+Resolution holds a lock per key (`<cache>/images/<key>.lock`), so concurrent runs sharing a
+cache form or fetch an image once and the rest hit L2. A run that loses a race on the Incus alias
+to a run with a different cache adopts that run's image. A cached tarball is checked against its
+`<key>.sha256` (written when it was exported or downloaded) before import, because Incus imports a
+truncated tarball without complaint and only fails when an instance unpacks it; one that fails
+the check, has no checksum, or fails to import is discarded, and resolution falls through to L1
+and then L0; an image that formed but couldn't be exported still runs,
+it just isn't cached as a tarball. A tarball is touched whenever it backs a run, which is what
+lets a cache drop the ones a run didn't need.
 
 ## Salt
 
@@ -208,6 +225,8 @@ linkup = "../../result/bin/linkup"
 - `limits.cpu` is at least 2: one CPU is fenced for telemetry. `limits.memory` is a byte size
   (`4GiB`, `4GB`, or bytes).
 - Durations are seconds, ISO 8601 (`PT30M`) or `HH:MM:SS`.
+- `limits.provision` bounds forming the runner's image, when no cache level hits, and then,
+  separately, the run's own provisioning. `limits.run` bounds the entrypoint.
 
 ### `runner.toml` (fixture)
 

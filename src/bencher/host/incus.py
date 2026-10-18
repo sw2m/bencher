@@ -35,7 +35,8 @@ kinds = {"container": "container", "vm": "virtual-machine"}
 
 class Incus:
     def __init__(self, socket: str | None) -> None:
-        self.client = Client(socket_path=self.socket(socket))
+        self.endpoint = self.socket(socket)
+        self.client = Client(socket_path=self.endpoint)
         self.instances = InstancesApi(self.client)
         self.operations = OperationsApi(self.client)
 
@@ -68,17 +69,27 @@ class Incus:
         ident = operation.rsplit("/", 1)[-1]
         deadline = time.monotonic() + timeout
         while True:
-            left = max(1, int(deadline - time.monotonic()))
+            window = min(max(1, int(deadline - time.monotonic())), 60)
+            started = time.monotonic()
             try:
                 raw = await self.operations.operation_wait_get_without_preload_content(
-                    ident, timeout=min(left, 60)
+                    ident, timeout=window
                 )
                 envelope = json.loads(await raw.aread())
             except ApiException as error:
                 raise Failure.of(error) from None
             if envelope.get("type") == "error":
-                if await self.running(ident) and time.monotonic() < deadline:
+                state = await self.operation(ident)
+                status = state.get("status")
+                if status == "Success":
+                    return state.get("metadata") or {}
+                if status in ("Failure", "Cancelled"):
+                    raise Failure(state.get("err") or f"operation {ident} {status.lower()}")
+                elapsed = time.monotonic() - started
+                if elapsed >= window and time.monotonic() < deadline:
                     continue
+                if time.monotonic() >= deadline:
+                    raise Failure(f"operation {ident} timed out")
                 raise Failure(f"Incus: {envelope.get('error')}")
             op = CertificatesPost202Response.model_validate(envelope).metadata
             if op is None:
@@ -90,13 +101,14 @@ class Incus:
             if time.monotonic() >= deadline:
                 raise Failure(f"operation {ident} timed out")
 
-    async def running(self, ident: str) -> bool:
+    async def operation(self, ident: str) -> dict[str, Any]:
         try:
             raw = await self.operations.operation_get_without_preload_content(ident)
             envelope = json.loads(await raw.aread())
         except ApiException as error:
             raise Failure.of(error) from None
-        return (envelope.get("metadata") or {}).get("status") in ("Pending", "Running")
+        state = envelope.get("metadata")
+        return state if isinstance(state, dict) else {}
 
     async def create(
         self,

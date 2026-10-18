@@ -43,8 +43,9 @@ class Agent:
             return
         self.log.write(done.stdout)
 
-    async def step(self, verb: str, timeout: float = 120) -> None:
-        done = await self.call(verb, timeout=timeout)
+    async def step(self, *args: str, timeout: float = 120) -> None:
+        verb = args[0]
+        done = await self.call(*args, timeout=timeout)
         self.log.write(done.stdout)
         self.log.write(done.stderr)
         if done.code != 0:

@@ -41,7 +41,8 @@ write_files:
           case "$status" in 126|127) status=$((status + 100)) ;; esac
           exit "$status" ;;
         provision)
-          timeout 600 sh -c 'until [ -d /bencher/run/runner ]; do sleep 1; done'
+          systemctl daemon-reload
+          timeout "$2" sh -c 'until [ -d /bencher/run/runner ]; do sleep 1; done'
           rm -rf /var/lib/bencher && mkdir -p /var/lib/bencher && cp -a /bencher/run/. /var/lib/bencher/
           set -- $(python3 -c 'import os; print(*sorted(os.sched_getaffinity(0)))')
           [ "$#" -ge 2 ] || { echo "bencher: telemetry fencing needs 2 CPUs, the instance has $#" >&2; exit 1; }
@@ -56,7 +57,7 @@ write_files:
           cloud-init clean --logs
           # see https://www.freedesktop.org/software/systemd/man/latest/machine-id.html#First%20Boot%20Semantics
           exec truncate -s 0 /etc/machine-id ;;
-        *) echo "usage: bencher-agent wait|log|clean|provision|flush|run <seconds>" >&2; exit 2 ;;
+        *) echo "usage: bencher-agent wait|log|clean|flush|provision <seconds>|run <seconds>" >&2; exit 2 ;;
       esac
   - path: /etc/systemd/system/victoria-metrics.service.d/bencher.conf
     content: |
