@@ -1,4 +1,5 @@
 from bencher.host.agent import Agent
+from bencher.host.cpus import Cpus
 from bencher.host.dumper import Dumper
 from bencher.host.exec import Exec
 from bencher.host.failure import Failure
@@ -12,6 +13,7 @@ from bencher.host.target import Target
 
 __all__ = [
     "Agent",
+    "Cpus",
     "Dumper",
     "Exec",
     "Failure",

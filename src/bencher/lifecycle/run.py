@@ -16,6 +16,7 @@ from bencher.contract.output.result import Result
 from bencher.contract.output.stage import Stage
 from bencher.contract.reason import Reason
 from bencher.host.agent import Agent
+from bencher.host.cpus import Cpus
 from bencher.host.failure import Failure
 from bencher.host.image import Image
 from bencher.host.incus import Incus
@@ -66,26 +67,41 @@ class Run:
         limit = plan.bench.limits.provision.total_seconds()
         image = Image(plan.runner, self.settings.cache, self.settings.l1, self.log)
         self.cache = await image.ensure(incus, limit)
-        self.log.say(f"launch {self.name}: {plan.runner.type} {image.alias}")
         self.share.path.mkdir(parents=True, exist_ok=True)
-        await incus.create(
-            self.name,
-            plan.runner.type,
-            image.alias,
-            config={
-                "limits.cpu": str(plan.bench.limits.cpu),
-                "limits.memory": str(int(plan.bench.limits.memory)),
-            },
-            devices={
-                "run": {
-                    "type": "disk",
-                    "source": str(self.share.path),
-                    "path": "/bencher/run",
-                    "readonly": "true",
-                },
-            },
-            timeout=limit,
-        )
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + limit
+        count = plan.bench.limits.cpu
+        cpus = Cpus(incus)
+        while True:
+            async with cpus:
+                pinned = await cpus.reserve(count)
+                if pinned is not None:
+                    self.log.say(
+                        f"launch {self.name}: {plan.runner.type} {image.alias}, CPUs {pinned}"
+                    )
+                    await incus.create(
+                        self.name,
+                        plan.runner.type,
+                        image.alias,
+                        config={
+                            "limits.cpu": pinned,
+                            "limits.memory": str(int(plan.bench.limits.memory)),
+                        },
+                        devices={
+                            "run": {
+                                "type": "disk",
+                                "source": str(self.share.path),
+                                "path": "/bencher/run",
+                                "readonly": "true",
+                            },
+                        },
+                        timeout=max(1.0, deadline - loop.time()),
+                    )
+                    return
+            if loop.time() >= deadline:
+                raise Halt(f"{count} CPUs did not come free within {plan.bench.limits.provision}")
+            self.log.say(f"waiting for {count} free CPUs")
+            await asyncio.sleep(5)
 
     async def provision(self, agent: Agent) -> None:
         loop = asyncio.get_running_loop()

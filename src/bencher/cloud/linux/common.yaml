@@ -27,9 +27,14 @@ write_files:
       case "${1:-}" in
         wait) exec cloud-init status --wait ;;
         log) exec cat /var/log/cloud-init-output.log ;;
-        flush) exec systemctl stop telegraf.service ;;
+        flush)
+          systemctl stop telegraf.service
+          now=$(python3 -c 'import os; print(*sorted(os.sched_getaffinity(0)))')
+          [ "$now" = "$(cat /run/bencher/cpus)" ] || { echo "bencher: the instance's CPUs moved during the run ($(cat /run/bencher/cpus) -> $now), so the fence did not hold" >&2; exit 3; } ;;
         run)
           [ -x "$entry" ] || { echo "bencher: $entry is not an executable entrypoint" >&2; exit 2; }
+          now=$(python3 -c 'import os; print(*sorted(os.sched_getaffinity(0)))')
+          [ "$now" = "$(cat /run/bencher/cpus)" ] || { echo "bencher: the instance's CPUs moved since provisioning ($(cat /run/bencher/cpus) -> $now), so the fence does not hold" >&2; exit 3; }
           status=0
           systemd-run --quiet --pipe --wait --collect --service-type=exec --unit=bencher-run \
             --property=Slice=bench.slice \
@@ -45,6 +50,7 @@ write_files:
           timeout "$2" sh -c 'until [ -d /bencher/run/runner ]; do sleep 1; done'
           rm -rf /var/lib/bencher && mkdir -p /var/lib/bencher && cp -a /bencher/run/. /var/lib/bencher/
           set -- $(python3 -c 'import os; print(*sorted(os.sched_getaffinity(0)))')
+          mkdir -p /run/bencher && echo "$@" > /run/bencher/cpus
           [ "$#" -ge 2 ] || { echo "bencher: telemetry fencing needs 2 CPUs, the instance has $#" >&2; exit 1; }
           systemctl set-property --runtime bencher.slice "AllowedCPUs=$1"
           shift

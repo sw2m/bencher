@@ -110,6 +110,17 @@ class Incus:
         state = envelope.get("metadata")
         return state if isinstance(state, dict) else {}
 
+    async def read(self, path: str, **query: str) -> Any:
+        request = self.client.param_serialize("GET", path, query_params=list(query.items()))
+        try:
+            response = await self.client.call_api(*request)
+            envelope = json.loads(await response.response.aread())
+        except ApiException as error:
+            raise Failure.of(error) from None
+        if envelope.get("type") == "error" or response.status >= 400:
+            raise Failure(f"Incus: {envelope.get('error') or f'HTTP {response.status}'}")
+        return envelope.get("metadata")
+
     async def create(
         self,
         name: str,
