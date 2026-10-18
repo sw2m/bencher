@@ -113,7 +113,7 @@ class Incus:
     async def read(self, path: str, **query: str) -> Any:
         request = self.client.param_serialize("GET", path, query_params=list(query.items()))
         try:
-            response = await self.client.call_api(*request)
+            response = await self.client.call_api(*request, _request_timeout=30)
             envelope = json.loads(await response.response.aread())
         except ApiException as error:
             raise Failure.of(error) from None

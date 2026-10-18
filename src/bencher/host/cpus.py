@@ -1,24 +1,43 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import fcntl
-import tempfile
+import os
 from pathlib import Path
 from types import TracebackType
-from typing import IO, Any
+from typing import Any
 
+from bencher.host.failure import Failure
 from bencher.host.incus import Incus
+from bencher.host.thread import Thread
 
 
 class Cpus:
+    path = Path(
+        "/tmp/bencher.cpus.lock"
+    )  # fixed, not TMPDIR: every bencher on the host must share it
+
     def __init__(self, incus: Incus) -> None:
         self.incus = incus
-        self.path = Path(tempfile.gettempdir()) / "bencher.cpus.lock"
-        self.file: IO[str] | None = None
+        self.fd: int | None = None
+        self.cores: list[list[Thread]] = []
 
     async def __aenter__(self) -> Cpus:
-        self.file = self.path.open("a")
-        await asyncio.to_thread(fcntl.flock, self.file, fcntl.LOCK_EX)
+        fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o666)
+        try:
+            with contextlib.suppress(PermissionError):
+                os.fchmod(fd, 0o666)
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    await asyncio.sleep(0.2)
+        except BaseException:
+            os.close(fd)
+            raise
+        self.fd = fd
         return self
 
     async def __aexit__(
@@ -27,20 +46,23 @@ class Cpus:
         error: BaseException | None,
         trace: TracebackType | None,
     ) -> None:
-        if self.file is not None:
-            self.file.close()
-            self.file = None
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+    @classmethod
+    def parse(cls, value: str) -> set[int]:
+        return set() if value.strip().isdigit() else cls.ids(value)
 
     @staticmethod
-    def parse(value: str) -> set[int]:
-        if value.strip().isdigit():
-            return set()
+    def ids(value: str) -> set[int]:
         found: set[int] = set()
         for part in value.split(","):
             low, sep, high = part.strip().partition("-")
-            if not low:
+            try:
+                found.update(range(int(low), int(high if sep else low) + 1))
+            except ValueError:
                 continue
-            found.update(range(int(low), int(high if sep else low) + 1))
         return found
 
     @staticmethod
@@ -48,35 +70,55 @@ class Cpus:
         return ",".join(str(i) for i in sorted(ids))
 
     @staticmethod
-    def choose(cores: list[list[int]], taken: set[int], count: int) -> list[int] | None:
-        whole = [core for core in cores if not taken & set(core)]
+    def choose(cores: list[list[Thread]], taken: set[int], count: int) -> list[int] | None:
+        free = [core for core in cores if not taken & {t.id for t in core}]
         chosen: list[int] = []
-        for core in reversed(whole):
-            chosen += core[: count - len(chosen)]
-            if len(chosen) == count:
-                return chosen
-        spare = [i for core in reversed(cores) for i in core if i not in taken and i not in chosen]
-        chosen += spare[: count - len(chosen)]
+        for core in reversed(free):
+            online = [t.id for t in core if t.online]
+            if online and len(chosen) < count:
+                chosen.append(online[0])
+        if len(chosen) < count:
+            spare = [
+                t.id
+                for core in reversed(cores)
+                for t in core
+                if t.online and t.id not in taken and t.id not in chosen
+            ]
+            chosen += spare[: count - len(chosen)]
         return chosen if len(chosen) == count else None
 
-    async def cores(self) -> list[list[int]]:
+    @property
+    def capacity(self) -> int:
+        return sum(1 for core in self.cores for t in core if t.online)
+
+    async def load(self) -> None:
+        server: dict[str, Any] = await self.incus.read("/1.0")
+        if (server.get("environment") or {}).get("server_clustered"):
+            raise Failure("bencher pins CPUs on one host and does not support a clustered Incus")
         resources: dict[str, Any] = await self.incus.read("/1.0/resources")
-        found = []
-        for socket in resources.get("cpu", {}).get("sockets", []):
-            for core in socket.get("cores", []):
-                ids = sorted(t["id"] for t in core.get("threads", []) if t.get("online"))
-                if ids:
-                    found.append(ids)
-        return sorted(found)
+        cores = []
+        for socket in (resources.get("cpu") or {}).get("sockets") or []:
+            for core in socket.get("cores") or []:
+                threads = [
+                    Thread(t["id"], bool(t.get("online")), int(t.get("numa_node", 0)))
+                    for t in core.get("threads") or []
+                ]
+                if threads:
+                    cores.append(sorted(threads, key=lambda t: t.id))
+        self.cores = sorted(cores, key=lambda core: core[0].id)
 
     async def taken(self) -> set[int]:
-        instances: list[dict[str, Any]] = await self.incus.read("/1.0/instances", recursion="1")
+        instances: list[dict[str, Any]] = await self.incus.read(
+            "/1.0/instances", recursion="1", **{"all-projects": "true"}
+        )
         found: set[int] = set()
         for instance in instances:
             config = instance.get("expanded_config") or {}
             found |= self.parse(str(config.get("limits.cpu", "")))
+            nodes = self.ids(str(config.get("limits.cpu.nodes", "")))
+            found |= {t.id for core in self.cores for t in core if t.node in nodes}
         return found
 
     async def reserve(self, count: int) -> str | None:
-        chosen = self.choose(await self.cores(), await self.taken(), count)
+        chosen = self.choose(self.cores, await self.taken(), count)
         return self.render(chosen) if chosen else None

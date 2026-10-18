@@ -10,6 +10,7 @@ from bencher.host.settings import Settings
 from bencher.host.share import Share
 from bencher.host.store import Store
 from bencher.host.target import Target
+from bencher.host.thread import Thread
 
 __all__ = [
     "Agent",
@@ -24,4 +25,5 @@ __all__ = [
     "Share",
     "Store",
     "Target",
+    "Thread",
 ]

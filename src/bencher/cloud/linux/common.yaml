@@ -27,14 +27,13 @@ write_files:
       case "${1:-}" in
         wait) exec cloud-init status --wait ;;
         log) exec cat /var/log/cloud-init-output.log ;;
-        flush)
-          systemctl stop telegraf.service
+        flush) exec systemctl stop telegraf.service ;;
+        check)
+          [ -f /run/bencher/cpus ] || { echo "bencher: no fenced CPU set recorded; provision did not run" >&2; exit 3; }
           now=$(python3 -c 'import os; print(*sorted(os.sched_getaffinity(0)))')
-          [ "$now" = "$(cat /run/bencher/cpus)" ] || { echo "bencher: the instance's CPUs moved during the run ($(cat /run/bencher/cpus) -> $now), so the fence did not hold" >&2; exit 3; } ;;
+          [ "$now" = "$(cat /run/bencher/cpus)" ] || { echo "bencher: the instance's CPUs moved since they were fenced ($(cat /run/bencher/cpus) -> $now), so the fence does not hold" >&2; exit 3; } ;;
         run)
           [ -x "$entry" ] || { echo "bencher: $entry is not an executable entrypoint" >&2; exit 2; }
-          now=$(python3 -c 'import os; print(*sorted(os.sched_getaffinity(0)))')
-          [ "$now" = "$(cat /run/bencher/cpus)" ] || { echo "bencher: the instance's CPUs moved since provisioning ($(cat /run/bencher/cpus) -> $now), so the fence does not hold" >&2; exit 3; }
           status=0
           systemd-run --quiet --pipe --wait --collect --service-type=exec --unit=bencher-run \
             --property=Slice=bench.slice \
@@ -63,7 +62,7 @@ write_files:
           cloud-init clean --logs
           # see https://www.freedesktop.org/software/systemd/man/latest/machine-id.html#First%20Boot%20Semantics
           exec truncate -s 0 /etc/machine-id ;;
-        *) echo "usage: bencher-agent wait|log|clean|flush|provision <seconds>|run <seconds>" >&2; exit 2 ;;
+        *) echo "usage: bencher-agent wait|log|clean|flush|check|provision <seconds>|run <seconds>" >&2; exit 2 ;;
       esac
   - path: /etc/systemd/system/victoria-metrics.service.d/bencher.conf
     content: |
