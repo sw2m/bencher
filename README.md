@@ -122,7 +122,7 @@ tarball to re-form.
 | Level | Where | Hit when |
 | --- | --- | --- |
 | L2 | the Incus image `bencher/<key>`, else `<cache>/images/<key>.tar` (imported), checked against `<key>.sha256` beside it | this machine formed or fetched it before |
-| L1 | `<key>.tar` on the GitHub release `v<version>`, checked against the release's `manifest.json` | a release formed the same image and type |
+| L1 | `<key>.tar` from the `l1` source (by default the GitHub release `v<version>`), checked against the source's `manifest.json` | a release formed the same image and type |
 | L0 | formed locally, then exported to `<cache>/images/<key>.tar` | nothing else hits |
 
 A release forms L1 images for the in-repo runners (`images:debian/12/cloud`, as a container and
@@ -406,7 +406,8 @@ repository (`bencher-images-<os>-`): keys are content-addressed, so benches shar
 cache is bounded by GitHub's eviction. Its outputs are `report` (the report JSON's path),
 `passed`, and `cache`, the report's cache level (`L0`, `L1` or `L2`); the step fails when the
 report does. `args` is split on whitespace and passed as arguments, never evaluated by a shell,
-so it can't carry a value with spaces. bencher itself is pinned by the action's ref.
+so it can't carry a value with spaces. `cache: "false"` skips the Actions cache, so the run
+resolves L1 or L0. bencher itself is pinned by the action's ref.
 
 ### Operator settings
 
@@ -418,6 +419,7 @@ come before the verb (`bencher --socket … run …`); a verb's own settings nes
 | --- | --- | --- | --- | --- |
 | socket | `--socket` | `BENCHER_SOCKET` | `socket` | the Incus and LXD default sockets |
 | cache | `--cache` | `BENCHER_CACHE` | `cache` | `$XDG_CACHE_HOME/bencher` |
+| l1 | `--l1` | `BENCHER_L1` | `l1` | `https://github.com/sw2m/bencher/releases/download/v{version}/{file}` |
 | keep | `run --keep` | `BENCHER_RUN__KEEP` | `[run] keep` | `false`: delete the instance after the run |
 | out | `run --out` | `BENCHER_RUN__OUT` | `[run] out` | stdout |
 
@@ -454,11 +456,17 @@ in two shapes (`ci/runner/` as a container, `ci/vm/` as a VM, sharing files by s
 ```sh
 sudo ci/setup.sh "$USER"                    # Incus, nix, and the runner user in incus-admin
 sg incus-admin -c "ci/e2e.sh runner report.json"
+sg incus-admin -c "ci/l1.sh runner l1"
 ```
 
-`ci/dev.sh [runner|vm]` does the same locally, inside an Incus VM shaped like the GitHub runner
+`ci/l1.sh` tests L1 without a release. It serves the image `e2e.sh` formed, with a
+`manifest.json`, from a scratch directory through `python3 -m http.server` on `127.0.0.1`, and
+points `BENCHER_L1` at it. With both local L2 copies removed, a run must then report `L1`; with
+the served tarball truncated, a run must fall back to `L0`.
+
+`ci/dev.sh [runner|vm] [e2e|l1]` does the same locally, inside an Incus VM shaped like the GitHub runner
 (Ubuntu 24.04, 4 CPUs, 16 GiB, Docker installed as on the runner, the worktree mounted read-only
-at `/src`), and copies the report to `ci/dev/report.<leg>.json` on the host. It re-points `/src`
+at `/src`), and copies the reports to `ci/dev/` on the host. It re-points `/src`
 at the invoking worktree and re-runs `setup.sh` on every invocation, so a kept VM follows
 whichever worktree runs it and a changed `setup.sh` reaches it; `incus delete -f
 bencher-dev` resets it entirely. It runs the worktree as it stands, uncommitted changes included,
@@ -481,5 +489,9 @@ newer push cancels the PR's running CI.
 Pushing a tag `v<version>` (matching `pyproject.toml`) runs `release`: each in-repo runner does a
 full run with an empty cache, which forms its L1 image; the tarballs and a `manifest.json` of
 their sha256 digests are attached to the GitHub release, and each leg's report is kept as an
-artifact. Publishing waits for every leg; re-running the failed jobs completes a partial
+artifact. The release is published as a **prerelease**. `verify` then downloads the action
+exactly as a consumer receives it (GitHub's tarball of the tag), runs it from a cold cache for
+each runner, and requires `cache: L1`; that proves the assets, the manifest, and that a
+consumer computes the same keys the release formed. Only then does `promote` make it the latest
+release. Publishing waits for every leg; re-running the failed jobs completes a partial
 release, since publishing uploads over an existing release rather than failing on it.

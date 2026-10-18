@@ -3,9 +3,10 @@ set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 name=bencher-dev
 leg=${1:-runner}
-case "$leg" in
-  runner|vm) ;;
-  *) echo "usage: ci/dev.sh [runner|vm]" >&2; exit 2 ;;
+check=${2:-e2e}
+case "$leg:$check" in
+  runner:e2e|runner:l1|vm:e2e|vm:l1) ;;
+  *) echo "usage: ci/dev.sh [runner|vm] [e2e|l1]" >&2; exit 2 ;;
 esac
 if ! incus info "$name" >/dev/null 2>&1; then
   incus init -q images:ubuntu/24.04/cloud "$name" --vm \
@@ -33,7 +34,17 @@ fi
 incus exec "$name" -- sh -c 'command -v docker >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -q docker.io >/dev/null'
 incus exec "$name" -- /src/ci/setup.sh ubuntu
 status=0
-incus exec "$name" -- sudo -iu ubuntu sg incus-admin -c "/src/ci/e2e.sh $leg /tmp/report.json" || status=$?
 mkdir -p "$root/ci/dev"
-incus file pull "$name/tmp/report.json" "$root/ci/dev/report.$leg.json" || echo "ci/dev.sh: no report to pull" >&2
+case "$check" in
+  e2e)
+    incus exec "$name" -- sudo -iu ubuntu sg incus-admin -c "/src/ci/e2e.sh $leg /tmp/report.json" || status=$?
+    incus file pull "$name/tmp/report.json" "$root/ci/dev/report.$leg.json" || echo "ci/dev.sh: no report to pull" >&2
+    ;;
+  l1)
+    incus exec "$name" -- rm -rf "/tmp/l1.$leg"
+    incus exec "$name" -- sudo -iu ubuntu sg incus-admin -c "/src/ci/l1.sh $leg /tmp/l1.$leg" || status=$?
+    rm -rf "$root/ci/dev/l1.$leg"
+    incus file pull -r "$name/tmp/l1.$leg" "$root/ci/dev/" || echo "ci/dev.sh: no reports to pull" >&2
+    ;;
+esac
 exit "$status"

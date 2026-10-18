@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     cache: Path = Field(
         default=home("XDG_CACHE_HOME", ".cache") / "bencher", description="fixture and run cache"
     )
+    l1: str = Field(
+        default="https://github.com/sw2m/bencher/releases/download/v{version}/{file}",
+        description="where L1 runner images are fetched from; {version} and {file} are filled in",
+    )
 
     @classmethod
     def file(cls) -> Path:

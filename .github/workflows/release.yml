@@ -67,7 +67,49 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --prerelease
             gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --clobber images/*.tar images/manifest.json
           else
-            gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --verify-tag --generate-notes images/*.tar images/manifest.json
+            gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --verify-tag --prerelease --generate-notes images/*.tar images/manifest.json
           fi
+
+  verify:
+    needs: publish
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - runner
+          - vm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: the action as a consumer receives it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir consumer
+          gh api "repos/$GITHUB_REPOSITORY/tarball/$GITHUB_REF_NAME" | tar -xz --strip-components=1 -C consumer
+      - id: bench
+        uses: ./consumer
+        with:
+          bench: ci/bench
+          args: ${{ matrix.runner == 'vm' && '--set fixture.runner=vm' || '' }}
+          cache: "false"
+      - run: '[ "${{ steps.bench.outputs.passed }}" = true ] && [ "${{ steps.bench.outputs.cache }}" = L1 ]'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: verify-${{ matrix.runner }}
+          path: ${{ steps.bench.outputs.report }}
+          if-no-files-found: warn
+
+  promote:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --prerelease=false --latest
