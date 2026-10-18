@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   form:
     runs-on: ubuntu-latest
@@ -28,6 +32,13 @@ jobs:
       - run: sg incus-admin -c "ci/e2e.sh ${{ matrix.runner }} $RUNNER_TEMP/report.json"
         env:
           BENCHER_CACHE: ${{ runner.temp }}/cache
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: report-${{ matrix.runner }}
+          path: ${{ runner.temp }}/report.json
+          if-no-files-found: warn
+      - run: jq -c '{pass, cache, errors}' "$RUNNER_TEMP/report.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: images-${{ matrix.runner }}
@@ -55,4 +66,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --verify-tag --generate-notes images/*.tar images/manifest.json
+          if gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --clobber images/*.tar images/manifest.json
+          else
+            gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --verify-tag --generate-notes images/*.tar images/manifest.json
+          fi

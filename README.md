@@ -398,11 +398,15 @@ nix run github:sw2m/bencher/<ref> -- schema report
     path: ${{ steps.bench.outputs.report }}
 ```
 
-The action installs Incus and nix on the runner, restores `~/.cache/bencher/images` from the
-Actions cache, runs `bencher run`, and saves the cache again when its set of files changed (a
-new image formed or fetched, or an unused one dropped along with its checksum). Its outputs are
-`report` (the report JSON's path), `passed`, and `cache`, the report's cache level (`L0`, `L1` or
-`L2`); the step fails when the report does. bencher itself is pinned by the action's ref.
+The action needs an apt-based runner (`ubuntu-latest`). It installs Incus and nix, restores
+`~/.cache/bencher/images` from the Actions cache, and runs `bencher run`. It then keeps only the
+image the report says this run used (`cache.key`, its tarball and checksum), and saves the cache
+under a fresh key when that changed what was restored. Restores match any earlier save from the
+repository (`bencher-images-<os>-`): keys are content-addressed, so benches share images, and the
+cache is bounded by GitHub's eviction. Its outputs are `report` (the report JSON's path),
+`passed`, and `cache`, the report's cache level (`L0`, `L1` or `L2`); the step fails when the
+report does. `args` is split on whitespace and passed as arguments, never evaluated by a shell,
+so it can't carry a value with spaces. bencher itself is pinned by the action's ref.
 
 ### Operator settings
 
@@ -464,7 +468,9 @@ host.
 On GitHub, nix comes from the pinned `nix-installer-action`; `setup.sh` installs it (a pinned
 installer release) only where it is missing.
 
-CI's `action` job runs the same consumer through the repository's own `action.yml`.
+CI's `action` job runs the same consumer through the repository's own `action.yml` twice. The
+first run forms the image (L0); then the job deletes the Incus image, so the second run must
+import the tarball the first one cached and report `L2`.
 
 `mergeable` is the one required status check on `main`; it needs `check`, `run` and `action`.
 Open PRs as drafts; CI runs when a PR is marked ready, or on demand with `workflow_dispatch`; a
@@ -474,4 +480,6 @@ newer push cancels the PR's running CI.
 
 Pushing a tag `v<version>` (matching `pyproject.toml`) runs `release`: each in-repo runner does a
 full run with an empty cache, which forms its L1 image; the tarballs and a `manifest.json` of
-their sha256 digests are attached to the GitHub release.
+their sha256 digests are attached to the GitHub release, and each leg's report is kept as an
+artifact. Publishing waits for every leg; re-running the failed jobs completes a partial
+release, since publishing uploads over an existing release rather than failing on it.

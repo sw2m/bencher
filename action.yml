@@ -10,7 +10,7 @@ inputs:
     description: The consumer directory holding bench.toml and expect.tsv
     required: true
   args:
-    description: Extra arguments to bencher run, such as --set overrides
+    description: Extra arguments to bencher run, split on whitespace and never evaluated by a shell, such as --set limits.cpu=2
     default: ""
 
 outputs:
@@ -27,15 +27,16 @@ outputs:
 runs:
   using: composite
   steps:
-    - shell: bash
+    - id: setup
+      shell: bash
       run: |
         sudo "$GITHUB_ACTION_PATH/ci/setup.sh" "$USER"
         mkdir -p ~/.cache/bencher/images
-        touch "$RUNNER_TEMP/bencher.start"
+        echo "key=bencher-images-$RUNNER_OS-$(cat /proc/sys/kernel/random/uuid)" >> "$GITHUB_OUTPUT"
     - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.cache/bencher/images
-        key: bencher-images-${{ runner.os }}-${{ github.run_id }}
+        key: ${{ steps.setup.outputs.key }}
         restore-keys: bencher-images-${{ runner.os }}-
     - id: run
       shell: bash
@@ -44,22 +45,35 @@ runs:
         ARGS: ${{ inputs.args }}
       run: |
         ls ~/.cache/bencher/images > "$RUNNER_TEMP/bencher.restored"
-        report="$RUNNER_TEMP/bencher.report.json"
+        report=$(mktemp "$RUNNER_TEMP/bencher.report.XXXXXX.json")
         echo "report=$report" >> "$GITHUB_OUTPUT"
-        . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+        profile=/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+        if [ -e "$profile" ]; then
+          . "$profile"
+        fi
+        case "$BENCH$ARGS" in
+          *[![:print:]]*) echo "bencher: bench and args must be printable" >&2; exit 2 ;;
+        esac
+        set -f
+        read -ra extra <<< "$ARGS"
+        set +f
+        command=$(printf '%q ' nix run "path:$GITHUB_ACTION_PATH" -- run "$BENCH" --out "$report" "${extra[@]}")
         status=0
-        sg incus-admin -c "nix run 'path:$GITHUB_ACTION_PATH' -- run '$BENCH' --out '$report' $ARGS" || status=$?
+        sg incus-admin -c "$command" || status=$?
         echo "passed=$(jq -r .pass "$report" 2>/dev/null || echo false)" >> "$GITHUB_OUTPUT"
         echo "cache=$(jq -r '.cache.level // ""' "$report" 2>/dev/null)" >> "$GITHUB_OUTPUT"
+        echo "key=$(jq -r '.cache.key // ""' "$report" 2>/dev/null)" >> "$GITHUB_OUTPUT"
         echo "status=$status" >> "$GITHUB_OUTPUT"
     - id: images
-      if: always()
+      if: always() && steps.run.outcome == 'success'
       shell: bash
+      env:
+        KEY: ${{ steps.run.outputs.key }}
       run: |
         cd ~/.cache/bencher/images
-        find . -name '*.tar' ! -newer "$RUNNER_TEMP/bencher.start" | while read -r tar; do
-          rm -f -- "$tar" "${tar%.tar}.sha256"
-        done
+        if [ -n "$KEY" ]; then
+          find . -maxdepth 1 -type f ! -name "$KEY.tar" ! -name "$KEY.sha256" -delete
+        fi
         if ls | cmp -s - "$RUNNER_TEMP/bencher.restored"; then
           echo "changed=false" >> "$GITHUB_OUTPUT"
         else
@@ -69,7 +83,7 @@ runs:
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.cache/bencher/images
-        key: bencher-images-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: ${{ steps.setup.outputs.key }}
     - if: always()
       shell: bash
       run: exit "${{ steps.run.outputs.status || 1 }}"
