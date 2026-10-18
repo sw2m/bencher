@@ -77,6 +77,8 @@ class Incus:
             except ApiException as error:
                 raise Failure.of(error) from None
             if envelope.get("type") == "error":
+                if await self.running(ident) and time.monotonic() < deadline:
+                    continue
                 raise Failure(f"Incus: {envelope.get('error')}")
             op = CertificatesPost202Response.model_validate(envelope).metadata
             if op is None:
@@ -87,6 +89,14 @@ class Incus:
                 raise Failure(op.err or f"operation {ident} {op.status.lower()}")
             if time.monotonic() >= deadline:
                 raise Failure(f"operation {ident} timed out")
+
+    async def running(self, ident: str) -> bool:
+        try:
+            raw = await self.operations.operation_get_without_preload_content(ident)
+            envelope = json.loads(await raw.aread())
+        except ApiException as error:
+            raise Failure.of(error) from None
+        return (envelope.get("metadata") or {}).get("status") in ("Pending", "Running")
 
     async def create(
         self,
@@ -147,10 +157,10 @@ class Incus:
                     return entry.address
         raise Failure(f"instance {name} has no global IPv4 address on its Incus NIC")
 
-    async def state(self, name: str, action: str, timeout: float) -> None:
+    async def state(self, name: str, action: str, timeout: float, force: bool = False) -> None:
         try:
             response = await self.instances.instance_state_put(
-                name, state=InstanceStatePut(action=action, force=action == "stop")
+                name, state=InstanceStatePut(action=action, force=force)
             )
         except ApiException as error:
             raise Failure.of(error) from None
@@ -182,7 +192,7 @@ class Incus:
 
     async def delete(self, name: str) -> None:
         with contextlib.suppress(Failure):
-            await self.state(name, "stop", 120)
+            await self.state(name, "stop", 120, force=True)
         try:
             response = await self.instances.instance_delete(name)
         except ApiException as error:

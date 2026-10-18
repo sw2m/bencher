@@ -40,7 +40,23 @@ write_files:
           # Incus reports exec exits 126/127 as errors and drops the code
           case "$status" in 126|127) status=$((status + 100)) ;; esac
           exit "$status" ;;
-        *) echo "usage: bencher-agent wait|log|flush|run <seconds>" >&2; exit 2 ;;
+        provision)
+          timeout 600 sh -c 'until [ -d /bencher/run/runner ]; do sleep 1; done'
+          rm -rf /var/lib/bencher && mkdir -p /var/lib/bencher && cp -a /bencher/run/. /var/lib/bencher/
+          set -- $(python3 -c 'import os; print(*sorted(os.sched_getaffinity(0)))')
+          [ "$#" -ge 2 ] || { echo "bencher: telemetry fencing needs 2 CPUs, the instance has $#" >&2; exit 1; }
+          systemctl set-property --runtime bencher.slice "AllowedCPUs=$1"
+          shift
+          systemctl set-property --runtime bench.slice "AllowedCPUs=$(echo "$@" | tr ' ' ',')"
+          if [ -f /var/lib/bencher/runner/salt/runner.sls ]; then
+            salt-call --local --retcode-passthrough --state-output=changes state.apply runner
+          fi
+          exec salt-call --local --retcode-passthrough --state-output=changes state.apply bencher ;;
+        clean)
+          cloud-init clean --logs
+          # see https://www.freedesktop.org/software/systemd/man/latest/machine-id.html#First%20Boot%20Semantics
+          exec truncate -s 0 /etc/machine-id ;;
+        *) echo "usage: bencher-agent wait|log|clean|provision|flush|run <seconds>" >&2; exit 2 ;;
       esac
   - path: /etc/systemd/system/victoria-metrics.service.d/bencher.conf
     content: |
@@ -65,14 +81,5 @@ write_files:
       Description=bencher benchmark: the entrypoint and everything it starts
 
 runcmd:
-  - set -e
   - systemctl disable --now telegraf.service victoria-metrics.service
-  - timeout 600 sh -c 'until [ -d /bencher/run/runner ]; do sleep 1; done'
-  - rm -rf /var/lib/bencher && mkdir -p /var/lib/bencher && cp -a /bencher/run/. /var/lib/bencher/
-  - set -- $(python3 -c 'import os; print(*sorted(os.sched_getaffinity(0)))')
-  - '[ "$#" -ge 2 ] || { echo "bencher: telemetry fencing needs 2 CPUs, the instance has $#"; exit 1; }'
   - systemctl daemon-reload
-  - systemctl set-property --runtime bencher.slice "AllowedCPUs=$1"
-  - shift && systemctl set-property --runtime bench.slice "AllowedCPUs=$(echo "$@" | tr ' ' ',')"
-  - if [ -f /var/lib/bencher/runner/salt/runner.sls ]; then salt-call --local --retcode-passthrough --state-output=changes state.apply runner; fi
-  - salt-call --local --retcode-passthrough --state-output=changes state.apply bencher
