@@ -1,0 +1,3 @@
+image = "images:debian/12/cloud"
+type = "vm"
+reporters = ["spin"]

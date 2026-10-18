@@ -9,16 +9,21 @@ on:
       - synchronize
       - reopened
       - ready_for_review
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
-    if: github.event.pull_request.draft == false
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
       - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
         with:
@@ -26,13 +31,40 @@ jobs:
           restore-prefixes-first-match: nix-${{ runner.os }}-
       - run: nix flake check --no-update-lock-file -L
 
+  run:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - runner
+          - vm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-run-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+          restore-prefixes-first-match: nix-run-${{ runner.os }}-
+      - run: sudo ci/setup.sh "$USER"
+      - run: sg incus-admin -c "ci/e2e.sh ${{ matrix.runner }} $RUNNER_TEMP/report.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: report-${{ matrix.runner }}
+          path: ${{ runner.temp }}/report.json
+          if-no-files-found: warn
+
   # The one status to mark required
   mergeable:
     needs:
       - check
+      - run
     if: always() # report on drafts too, so the status is never stuck "expected"
     runs-on: ubuntu-latest
     steps:
       - run: |
-          echo "check=${{ needs.check.result }}"
+          echo "check=${{ needs.check.result }} run=${{ needs.run.result }}"
           [ "${{ needs.check.result }}" = success ]
+          [ "${{ needs.run.result }}" = success ]

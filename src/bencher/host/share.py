@@ -21,7 +21,7 @@ class Share:
         self.remove()
         self.path.mkdir(parents=True)
         self.states()
-        self.runner(tree)
+        self.runner(tree, (root / bench.fixture.path).resolve())
         artifacts = self.artifacts(root, bench)
         self.params(bench)
         self.pillar(bench, runner, artifacts)
@@ -31,8 +31,16 @@ class Share:
         with resources.as_file(resources.files("bencher").joinpath("states")) as states:
             shutil.copytree(states, self.path / "states")
 
-    def runner(self, tree: Path) -> None:
-        shutil.copytree(tree, self.path / "runner", symlinks=True)
+    def runner(self, tree: Path, fixture: Path) -> None:
+        for link in tree.rglob("*"):
+            if not link.is_symlink():
+                continue
+            target = link.resolve()
+            if not target.exists():
+                raise FileNotFoundError(f"runner symlink {link} is dangling")
+            if not target.is_relative_to(fixture):
+                raise PermissionError(f"runner symlink {link} leaves the fixture: {target}")
+        shutil.copytree(tree, self.path / "runner")
 
     def artifacts(self, root: Path, bench: Bench) -> dict[str, str]:
         (self.inputs / "artifacts").mkdir(parents=True)
@@ -68,8 +76,6 @@ class Share:
 
     def publish(self) -> None:
         for path in [self.path, *self.path.rglob("*")]:
-            if path.is_symlink():
-                continue
             if path.is_dir():
                 path.chmod(0o755)
             else:

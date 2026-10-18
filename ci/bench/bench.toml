@@ -1,0 +1,15 @@
+[fixture]
+path = ".."
+runner = "runner"
+
+[limits]
+cpu = 2
+memory = "2GiB"
+provision = "PT20M"
+run = 300
+
+[params]
+duration = 4
+
+[artifacts]
+probe = "probe.txt"
