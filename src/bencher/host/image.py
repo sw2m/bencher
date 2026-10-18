@@ -142,11 +142,12 @@ class Image:
         return self.source.format(version=self.version, file=file)
 
     async def fetch(self) -> bool:
-        url = self.url("manifest.json")
         try:
+            url = self.url("manifest.json")
             async with httpx.AsyncClient(follow_redirects=True, timeout=600) as client:
                 response = await client.get(url)
                 if response.status_code == 404:
+                    self.log.say(f"no L1 image at {url}, forming locally")
                     return False
                 response.raise_for_status()
                 manifest = response.json()

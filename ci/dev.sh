@@ -42,7 +42,7 @@ case "$check" in
     ;;
   l1)
     incus exec "$name" -- rm -rf "/tmp/l1.$leg"
-    incus exec "$name" -- sudo -iu ubuntu sg incus-admin -c "/src/ci/l1.sh $leg /tmp/l1.$leg" || status=$?
+    incus exec "$name" -- sudo -iu ubuntu sg incus-admin -c "/src/ci/l1.sh $leg /tmp/l1.$leg corrupt" || status=$?
     rm -rf "$root/ci/dev/l1.$leg"
     incus file pull -r "$name/tmp/l1.$leg" "$root/ci/dev/" || echo "ci/dev.sh: no reports to pull" >&2
     ;;

@@ -406,8 +406,8 @@ repository (`bencher-images-<os>-`): keys are content-addressed, so benches shar
 cache is bounded by GitHub's eviction. Its outputs are `report` (the report JSON's path),
 `passed`, and `cache`, the report's cache level (`L0`, `L1` or `L2`); the step fails when the
 report does. `args` is split on whitespace and passed as arguments, never evaluated by a shell,
-so it can't carry a value with spaces. `cache: "false"` skips the Actions cache, so the run
-resolves L1 or L0. bencher itself is pinned by the action's ref.
+so it can't carry a value with spaces. `cache: "false"` skips the Actions cache, so on a runner
+without the Incus image already present the run resolves L1 or L0. bencher itself is pinned by the action's ref.
 
 ### Operator settings
 
@@ -459,10 +459,13 @@ sg incus-admin -c "ci/e2e.sh runner report.json"
 sg incus-admin -c "ci/l1.sh runner l1"
 ```
 
-`ci/l1.sh` tests L1 without a release. It serves the image `e2e.sh` formed, with a
-`manifest.json`, from a scratch directory through `python3 -m http.server` on `127.0.0.1`, and
-points `BENCHER_L1` at it. With both local L2 copies removed, a run must then report `L1`; with
-the served tarball truncated, a run must fall back to `L0`.
+`ci/l1.sh <leg> <out> [corrupt]` tests L1 without a release. It exports the image `e2e.sh`
+formed and serves it, with a `manifest.json`, from a scratch directory through Python's
+`http.server` on `127.0.0.1` (one process binds port 0 and reports it, so there is no port
+race), behind a 302 redirect as GitHub's release downloads have. With the Incus image removed
+and an empty scratch `BENCHER_CACHE`, a run must report `L1`. With `corrupt`, the served tarball
+is truncated, and the run must log that it "fails its digest" and fall back to `L0`; CI does that
+on the container leg only, since the fallback doesn't depend on the instance type.
 
 `ci/dev.sh [runner|vm] [e2e|l1]` does the same locally, inside an Incus VM shaped like the GitHub runner
 (Ubuntu 24.04, 4 CPUs, 16 GiB, Docker installed as on the runner, the worktree mounted read-only
@@ -492,6 +495,7 @@ their sha256 digests are attached to the GitHub release, and each leg's report i
 artifact. The release is published as a **prerelease**. `verify` then downloads the action
 exactly as a consumer receives it (GitHub's tarball of the tag), runs it from a cold cache for
 each runner, and requires `cache: L1`; that proves the assets, the manifest, and that a
-consumer computes the same keys the release formed. Only then does `promote` make it the latest
-release. Publishing waits for every leg; re-running the failed jobs completes a partial
-release, since publishing uploads over an existing release rather than failing on it.
+consumer computes the same keys the release formed. Only then does `promote` turn it into a
+full release; GitHub treats the newest full release as latest. Publishing waits for every leg; re-running the failed jobs completes a partial
+release, since publishing uploads over an existing prerelease rather than failing on it. A
+release that has already been promoted is never touched again: its assets are immutable.

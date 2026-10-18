@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -29,6 +29,19 @@ class Settings(BaseSettings):
         default="https://github.com/sw2m/bencher/releases/download/v{version}/{file}",
         description="where L1 runner images are fetched from; {version} and {file} are filled in",
     )
+
+    @field_validator("l1")
+    @classmethod
+    def template(cls, value: str) -> str:
+        if "{file}" not in value:
+            raise ValueError("l1 must be a URL template containing {file}")
+        try:
+            value.format(version="0", file="manifest.json")
+        except (KeyError, IndexError, ValueError) as error:
+            raise ValueError(
+                f"l1 is not a valid template ({error!r}); it may use only {{version}} and {{file}}"
+            ) from None
+        return value
 
     @classmethod
     def file(cls) -> Path:

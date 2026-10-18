@@ -66,8 +66,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --prerelease
+          state=$(gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease 2>/dev/null || echo none)
+          if [ "$state" = false ]; then
+            echo "$GITHUB_REF_NAME is already released; its assets are left as they are"
+          elif [ "$state" = true ]; then
             gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --clobber images/*.tar images/manifest.json
           else
             gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --verify-tag --prerelease --generate-notes images/*.tar images/manifest.json
@@ -112,4 +114,4 @@ jobs:
     steps:
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release edit "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --prerelease=false --latest
+        run: gh release edit "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --prerelease=false

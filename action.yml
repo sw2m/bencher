@@ -13,7 +13,7 @@ inputs:
     description: Extra arguments to bencher run, split on whitespace and never evaluated by a shell, such as --set limits.cpu=2
     default: ""
   cache:
-    description: Restore and save runner images through the Actions cache ("false" forces a run to resolve L1 or L0)
+    description: Restore and save runner images through the Actions cache ("false" makes a run resolve L1 or L0, on a runner without the Incus image already present)
     default: "true"
 
 outputs:
