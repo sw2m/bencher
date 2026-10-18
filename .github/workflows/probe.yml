@@ -1,0 +1,28 @@
+name: probe
+
+on:
+  pull_request:
+    types:
+      - synchronize
+
+permissions: {}
+
+jobs:
+  token:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.DRAFT_GUARD }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          show() { echo "== $1"; shift; "$@" 2>&1 | grep -iE '^HTTP|x-accepted-github-permissions|x-github-sso|github-authentication-token-expiration|"message"|"login"|"number"|"type"|"isDraft"|errors' | head -8; echo; }
+          [ -n "$GH_TOKEN" ] && echo "secret present, length ${#GH_TOKEN}, prefix ${GH_TOKEN:0:11}" || echo "secret EMPTY"
+          show "graphql viewer" gh api graphql -f query='{ viewer { login } }'
+          show "rest user" gh api -i user
+          show "rest read pr" gh api -i "repos/$REPO/pulls/$PR"
+          title=$(gh api "repos/$REPO/pulls/$PR" --jq .title)
+          show "rest write pr (same title)" gh api -i -X PATCH "repos/$REPO/pulls/$PR" -f title="$title"
+          id=$(gh api graphql -f query="{ repository(owner: \"${REPO%/*}\", name: \"${REPO#*/}\") { pullRequest(number: $PR) { id } } }" --jq .data.repository.pullRequest.id)
+          echo "== graphql read pr id: ${id:-<none>}"
+          show "graphql convertPullRequestToDraft" gh api -i graphql -f query="mutation { convertPullRequestToDraft(input: {pullRequestId: \"$id\"}) { pullRequest { isDraft } } }"
