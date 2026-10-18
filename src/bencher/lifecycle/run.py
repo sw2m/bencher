@@ -1,26 +1,27 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import uuid
 from pathlib import Path
-from typing import TextIO
 
 import httpx
 from pydantic import ValidationError
 
 from bencher.contract.input.override import Override
+from bencher.contract.output.cache import Cache
 from bencher.contract.output.error import Error
 from bencher.contract.output.line import Line
 from bencher.contract.output.report import Report
 from bencher.contract.output.result import Result
 from bencher.contract.output.stage import Stage
 from bencher.contract.reason import Reason
+from bencher.host.agent import Agent
 from bencher.host.failure import Failure
+from bencher.host.image import Image
 from bencher.host.incus import Incus
+from bencher.host.log import Log
 from bencher.host.settings import Settings
 from bencher.host.share import Share
-from bencher.host.target import Target
 from bencher.lifecycle.halt import Halt
 from bencher.lifecycle.plan import Plan
 from bencher.measure.export import Export
@@ -29,16 +30,15 @@ from bencher.measure.stats import Stats
 
 
 class Run:
-    def __init__(
-        self, plan: Plan, settings: Settings, keep: bool, log: TextIO | None = None
-    ) -> None:
+    def __init__(self, plan: Plan, settings: Settings, keep: bool) -> None:
         self.plan = plan
         self.settings = settings
         self.keep = keep
-        self.log = log if log is not None else sys.stderr
+        self.log = Log()
         self.name = f"bencher-{uuid.uuid4().hex[:12]}"
         self.share = Share(settings.cache / "runs" / self.name)
         self.errors: list[Error] = []
+        self.cache: Cache | None = None
 
     @classmethod
     async def perform(
@@ -48,7 +48,7 @@ class Run:
             plan = Plan.load(root.resolve(), overrides)
         except Exception as error:
             message = Reason.of(error)
-            print(f"bencher: load: {message}", file=sys.stderr, flush=True)
+            Log().say(f"load: {message}")
             return Report(
                 passed=False,
                 overrides=Override.values(overrides),
@@ -56,22 +56,22 @@ class Run:
             )
         return await cls(plan, settings, keep).start()
 
-    def say(self, text: str) -> None:
-        print(f"bencher: {text}", file=self.log, flush=True)
-
     def fail(self, stage: Stage, error: BaseException) -> None:
         message = Reason.of(error)
-        self.say(f"{stage}: {message}")
+        self.log.say(f"{stage}: {message}")
         self.errors.append(Error(stage=stage, message=message))
 
-    async def create(self, incus: Incus) -> Target:
+    async def create(self, incus: Incus) -> None:
         plan = self.plan
-        self.say(f"launch {self.name}: {plan.runner.type} {plan.runner.image}")
+        limit = plan.bench.limits.provision.total_seconds()
+        image = Image(plan.runner, self.settings.cache, self.log)
+        self.cache = await image.ensure(incus, limit)
+        self.log.say(f"launch {self.name}: {plan.runner.type} {image.alias}")
         self.share.path.mkdir(parents=True, exist_ok=True)
         await incus.create(
             self.name,
             plan.runner.type,
-            plan.runner.image,
+            image.alias,
             config={
                 "limits.cpu": str(plan.bench.limits.cpu),
                 "limits.memory": str(int(plan.bench.limits.memory)),
@@ -84,50 +84,18 @@ class Run:
                     "readonly": "true",
                 },
             },
-            timeout=plan.bench.limits.provision.total_seconds(),
+            timeout=limit,
         )
-        target = Target.of(plan.runner.type, await incus.config(self.name))
-        target.layers()
-        return target
 
-    async def boot(self, incus: Incus, target: Target) -> None:
-        self.say(f"cloud-init for {target.distro} {target.release}")
-        await incus.configure(self.name, {"cloud-init.user-data": target.compose()})
-        await incus.state(self.name, "start", 300)
-
-    async def provision(self, incus: Incus) -> None:
+    async def provision(self, agent: Agent) -> None:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.plan.bench.limits.provision.total_seconds()
-        while loop.time() < deadline:
-            try:
-                done = await incus.exec(
-                    self.name, ["bencher-agent", "wait"], deadline - loop.time()
-                )
-            except Failure:
-                await asyncio.sleep(2)
-                continue
-            if done.code in (0, 2):  # 2 is cloud-init's "done, degraded"
-                return
-            if done.code == 1:
-                await self.dump(incus)
-                raise Halt("cloud-init reported an error; see its output above")
-            await asyncio.sleep(2)
-        await self.dump(incus)
-        raise Halt(f"provisioning did not finish within {self.plan.bench.limits.provision}")
+        await agent.wait(deadline - loop.time())
+        left = deadline - loop.time()
+        await agent.step("provision", str(int(left)), timeout=left)
 
-    async def dump(self, incus: Incus) -> None:
-        try:
-            done = await incus.exec(self.name, ["bencher-agent", "log"], 60)
-        except Failure as error:
-            self.say(f"cloud-init output unavailable: {error}")
-            return
-        self.log.write(done.stdout.decode(errors="replace"))
-
-    async def execute(self, incus: Incus) -> Result:
-        limit = self.plan.bench.limits.run
-        seconds = int(limit.total_seconds())
-        done = await incus.exec(self.name, ["bencher-agent", "run", str(seconds)], seconds + 120)
-        self.log.write(done.stderr.decode(errors="replace"))
+    async def execute(self, agent: Agent) -> Result:
+        done = await agent.run(int(self.plan.bench.limits.run.total_seconds()))
         if done.code != 0:
             raise Halt(f"entrypoint exited {done.code}")
         try:
@@ -140,10 +108,8 @@ class Run:
                 raise Halt(f"row {row.name} {dict(row.tags)}: undeclared reporter {row.reporter!r}")
         return result
 
-    async def harvest(self, incus: Incus) -> dict[str, dict[str, Series]]:
-        done = await incus.exec(self.name, ["bencher-agent", "flush"], 120)
-        if done.code != 0:
-            raise Halt(f"stopping the collector exited {done.code}")
+    async def harvest(self, incus: Incus, agent: Agent) -> dict[str, dict[str, Series]]:
+        await agent.step("flush")
         base = f"http://{await incus.address(self.name)}:8428"
         async with httpx.AsyncClient(base_url=base, timeout=120) as client:
             (await client.get("/internal/force_flush")).raise_for_status()
@@ -173,6 +139,7 @@ class Run:
         return Report(
             passed=not self.errors and all(o.passed for o in outcomes),
             overrides=Override.values(self.plan.overrides),
+            cache=self.cache,
             rows=lines,
             system=telemetry.get("system", {}),
             expectations=outcomes,
@@ -181,7 +148,10 @@ class Run:
 
     def failed(self) -> Report:
         return Report(
-            passed=False, overrides=Override.values(self.plan.overrides), errors=self.errors
+            passed=False,
+            overrides=Override.values(self.plan.overrides),
+            cache=self.cache,
+            errors=self.errors,
         )
 
     async def start(self) -> Report:
@@ -203,20 +173,21 @@ class Run:
         plan = self.plan
         stage: Stage = "launch"
         try:
-            target = await self.create(incus)
+            await self.create(incus)
             stage = "stage"
             self.share.stage(plan.root, plan.bench, plan.runner, plan.tree)
             stage = "launch"
-            await self.boot(incus, target)
+            await incus.state(self.name, "start", 300)
+            agent = Agent(incus, self.name, self.log)
             stage = "provision"
-            self.say("provision")
-            await self.provision(incus)
+            self.log.say("provision")
+            await self.provision(agent)
             stage = "execute"
-            self.say("execute")
-            result = await self.execute(incus)
+            self.log.say("execute")
+            result = await self.execute(agent)
             stage = "harvest"
-            self.say("harvest")
-            telemetry = await self.harvest(incus)
+            self.log.say("harvest")
+            telemetry = await self.harvest(incus, agent)
             stage = "report"
             return self.report(result, telemetry)
         except Exception as error:
@@ -226,7 +197,7 @@ class Run:
     async def teardown(self, incus: Incus) -> Failure | None:
         failure = None
         if self.keep:
-            self.say(f"kept {self.name}; share at {self.share.path}")
+            self.log.say(f"kept {self.name}; share at {self.share.path}")
         else:
             try:
                 await incus.delete(self.name)

@@ -30,10 +30,12 @@ them through a param the runner reads, by the runner's own convention (e.g. `[pa
 ```
 bencher run <bench dir>
   1. load       bench.toml (+ --set), locate the fixture runner, load runner.toml and expect.tsv
-  2. launch     create the Incus instance stopped, with the run share; read the image's os/release
+  2. launch     resolve the runner's formed image (see Images), create the instance from it stopped,
+                with the run share
   3. stage      write the run share: bencher's Salt states, the runner, the consumer's inputs, pillar
-  4. launch     compose the cloud-config for that os/release, set it as user-data, start
-  5. provision  wait for cloud-init: packages, CPU fencing, the runner's states, bencher's states
+  4. launch     start
+  5. provision  `bencher-agent provision`: copy the share, fence the CPUs, apply the runner's and
+                bencher's states
   6. execute    exec the entrypoint, fenced from telemetry; its stdout is the result
   7. harvest    stop the collector, then flush and export the store over HTTP from the host
   8. teardown   delete the instance
@@ -49,8 +51,8 @@ Incus through [pyincusd](https://github.com/sw2m/pyincusd), over the local unix 
 `socket` setting, else the Incus and LXD default sockets in turn). A runner declares whether it
 is a `container` or a `vm`; everything else about the run is identical between the two.
 
-Each instance gets `limits.cpu` and `limits.memory` from the consumer, the composed
-`cloud-init.user-data`, and one read-only disk device: the run share at `/bencher/run`.
+Each instance gets `limits.cpu` and `limits.memory` from the consumer and one read-only disk
+device: the run share at `/bencher/run`.
 Containers bind-mount it; VMs get it over virtiofs (9p as fallback), mounted by incus-agent.
 Nothing is written back to the host over the share: the result comes from the entrypoint's
 stdout over the Incus API, and telemetry from the store over the instance's network address.
@@ -69,28 +71,22 @@ cloud/<family>/<distro>/<release>.yaml     a release (bookworm) — required: th
 ```
 
 The distro and release come from the image's own properties (`image.os`, `image.release`), read
-from Incus after the instance is created. Missing intermediate layers are skipped; a missing
-release layer fails the run at `launch` and names what is supported.
+from Incus after the forming instance is created. Missing intermediate layers are skipped; a
+missing release layer fails the run at `launch` and names what is supported.
 
 Layers merge by cloud-init's own default rule
 ([merging](https://cloudinit.readthedocs.io/en/latest/reference/merging.html)): maps merge
 recursively, lists append, scalars are replaced by the more specific layer. Composition happens
-on the host, inside a run whenever no cached runner image hits, so the result is one document
+on the host, inside a run whenever no formed image hits, so the result is one document
 that behaves the same under any init system. It is internal: overlays live only in bencher, and
 runners provision through Salt.
 
 For Linux the layers install Salt (`salt-common`), Telegraf and VictoriaMetrics from their
 signed repositories at pinned versions, write the Salt minion config, declare two slices
 (`bencher.slice` for telemetry, `bench.slice` for the benchmark), write the systemd drop-ins that
-put both telemetry services in `bencher.slice`, and run:
-
-1. stop the telemetry services, so provisioning isn't recorded;
-2. wait for the run share and copy it to local disk (`/var/lib/bencher`), so the measurement
-   never touches a share;
-3. fence the CPUs: the first CPU of the instance's affinity goes to `bencher.slice`, the rest to
-   `bench.slice` (set at runtime with `systemctl set-property`, since a container's CPU ids are
-   chosen by Incus per instance);
-4. `salt-call --local state.apply runner`, then `state.apply bencher`.
+put both telemetry services in `bencher.slice`, and disable the telemetry services, so the
+formed image boots without recording. Nothing in the layers depends on a run: everything per run
+is `bencher-agent provision`.
 
 ### The guest agent
 
@@ -100,12 +96,50 @@ entrypoint's environment) and one command, `bencher-agent`, which the host drive
 
 | Command | Does |
 | --- | --- |
-| `bencher-agent wait` | blocks until provisioning finishes (`cloud-init status --wait`) |
-| `bencher-agent log` | prints the provisioning output, shown when provisioning fails |
+| `bencher-agent wait` | blocks until cloud-init finishes (`cloud-init status --wait`) |
+| `bencher-agent log` | prints the cloud-init output, shown when it fails |
+| `bencher-agent clean` | resets cloud-init's state and empties the machine id before the image is published, so each instance gets its own id without systemd's first-boot presets re-enabling the telemetry services |
+| `bencher-agent provision <seconds>` | waits up to `<seconds>` (the rest of `limits.provision`) for the run share and copies it to local disk (`/var/lib/bencher`), so the measurement never touches a share; fences the CPUs (the first CPU of the instance's affinity to `bencher.slice`, the rest to `bench.slice`, set at runtime with `systemctl set-property` since a container's CPU ids are chosen by Incus per instance); then `salt-call --local state.apply runner` and `state.apply bencher` |
 | `bencher-agent run <seconds>` | runs the entrypoint in `bench.slice` with `/etc/bencher/env`, killed after `<seconds>`; its stdout is the result |
 | `bencher-agent flush` | stops the collector, which makes its final gather and flush |
 
 Every OS family's layers provide the same `bencher-agent`, so the host carries no per-family code.
+
+## Images
+
+A runner's image is formed once and reused. Forming (L0) launches the runner's `image` with the
+composed cloud-config, waits for cloud-init, runs `bencher-agent clean`, stops the instance and
+publishes it as the Incus image `bencher/<key>`; every run then launches from that image, so a
+run never repeats package installation. The key is a digest of the bencher version, bencher's
+whole package source (the cloud layers and the code that composes and forms them), and the
+runner's `image` and `type`: a change to any of these forms a new image. The key holds the
+`image` *name*, not what it currently points to: a floating alias such as
+`images:debian/12/cloud` is frozen at whatever it resolved to when the image was formed, until
+something in the key changes. That is the point of the cache (a stable base between runs), and
+the trade-off (an upstream rebuild doesn't reach a cached image). Delete `bencher/<key>` and its
+tarball to re-form.
+
+| Level | Where | Hit when |
+| --- | --- | --- |
+| L2 | the Incus image `bencher/<key>`, else `<cache>/images/<key>.tar` (imported), checked against `<key>.sha256` beside it | this machine formed or fetched it before |
+| L1 | `<key>.tar` on the GitHub release `v<version>`, checked against the release's `manifest.json` | a release formed the same image and type |
+| L0 | formed locally, then exported to `<cache>/images/<key>.tar` | nothing else hits |
+
+L1 is whatever the release attached; a release without the key, or with no `manifest.json` at
+all, is a miss. A fetch that fails, or fails its digest, falls back to forming, and says why. The
+digest guards against corruption, not tampering: the manifest comes from the same release as the
+tarball, so L1 trusts whoever can publish this repository's releases, exactly as running its
+code does.
+
+Resolution holds a lock per key (`<cache>/images/<key>.lock`), so concurrent runs sharing a
+cache form or fetch an image once and the rest hit L2. A run that loses a race on the Incus alias
+to a run with a different cache adopts that run's image. A cached tarball is checked against its
+`<key>.sha256` (written when it was exported or downloaded) before import, because Incus imports a
+truncated tarball without complaint and only fails when an instance unpacks it; one that fails
+the check, has no checksum, or fails to import is discarded, and resolution falls through to L1
+and then L0; an image that formed but couldn't be exported still runs,
+it just isn't cached as a tarball. A tarball is touched whenever it backs a run, which is what
+lets a cache drop the ones a run didn't need.
 
 ## Salt
 
@@ -191,6 +225,8 @@ linkup = "../../result/bin/linkup"
 - `limits.cpu` is at least 2: one CPU is fenced for telemetry. `limits.memory` is a byte size
   (`4GiB`, `4GB`, or bytes).
 - Durations are seconds, ISO 8601 (`PT30M`) or `HH:MM:SS`.
+- `limits.provision` bounds forming the runner's image, when no cache level hits, and then,
+  separately, the run's own provisioning. `limits.run` bounds the entrypoint.
 
 ### `runner.toml` (fixture)
 
@@ -250,6 +286,7 @@ with the environment in `/etc/bencher/env`:
 {
   "pass": true,
   "overrides": {},
+  "cache": {"key": "f5949fe0ff596a01a84dfcd8", "level": "L2"},
   "rows": [
     {"name": "throughput", "tags": {"pair": "linkup.pppd"}, "reporter": "linkup",
      "samples": {"Mbit/s": [141.2, 139.8, 142.0]},
@@ -273,6 +310,10 @@ with the environment in `/etc/bencher/env`:
 
 - `overrides` is every `--set` applied to `bench.toml` for this run, as dotted key → value. A
   consumer CI can refuse a report whose `overrides` isn't empty.
+- `cache` is the runner image the run launched from (see Images): its `key`, and the `level` it
+  came from: `L2` (this machine's Incus image or cache tarball), `L1` (downloaded from the
+  release) or `L0` (formed by this run). It is `null` when the run failed before an image was
+  resolved.
 - `stats.ci` is the distribution-free 95% confidence interval of the median
   (`scipy.stats.quantile_test`) as `[low, high]`, `null` when there are too few samples (under
   six) to reach 95%.
