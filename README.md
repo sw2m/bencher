@@ -125,7 +125,9 @@ tarball to re-form.
 | L1 | `<key>.tar` on the GitHub release `v<version>`, checked against the release's `manifest.json` | a release formed the same image and type |
 | L0 | formed locally, then exported to `<cache>/images/<key>.tar` | nothing else hits |
 
-L1 is whatever the release attached; a release without the key, or with no `manifest.json` at
+A release forms L1 images for the in-repo runners (`images:debian/12/cloud`, as a container and
+as a VM); a consumer runner on the same image and type downloads them instead of forming (see
+Release). L1 is whatever the release attached; a release without the key, or with no `manifest.json` at
 all, is a miss. A fetch that fails, or fails its digest, falls back to forming, and says why. The
 digest guards against corruption, not tampering: the manifest comes from the same release as the
 tarball, so L1 trusts whoever can publish this repository's releases, exactly as running its
@@ -381,6 +383,27 @@ nix run github:sw2m/bencher/<ref> -- bless crates/mux/bench --report report.json
 nix run github:sw2m/bencher/<ref> -- schema report
 ```
 
+### GitHub Action
+
+```yaml
+- uses: actions/checkout@v4
+- id: bench
+  uses: sw2m/bencher@<ref>
+  with:
+    bench: crates/mux/bench
+    args: --set limits.cpu=2
+- uses: actions/upload-artifact@v4
+  if: always()
+  with:
+    path: ${{ steps.bench.outputs.report }}
+```
+
+The action installs Incus and nix on the runner, restores `~/.cache/bencher/images` from the
+Actions cache, runs `bencher run`, and saves the cache again when its set of files changed (a
+new image formed or fetched, or an unused one dropped along with its checksum). Its outputs are
+`report` (the report JSON's path), `passed`, and `cache`, the report's cache level (`L0`, `L1` or
+`L2`); the step fails when the report does. bencher itself is pinned by the action's ref.
+
 ### Operator settings
 
 How this machine runs bencher, layered by pydantic-settings' `CliApp`: a flag beats an
@@ -431,8 +454,9 @@ sg incus-admin -c "ci/e2e.sh runner report.json"
 
 `ci/dev.sh [runner|vm]` does the same locally, inside an Incus VM shaped like the GitHub runner
 (Ubuntu 24.04, 4 CPUs, 16 GiB, Docker installed as on the runner, the worktree mounted read-only
-at `/src`), and copies the report to `ci/dev/report.<leg>.json` on the host. It re-runs
-`setup.sh` on every invocation, so a changed `setup.sh` reaches a kept VM; `incus delete -f
+at `/src`), and copies the report to `ci/dev/report.<leg>.json` on the host. It re-points `/src`
+at the invoking worktree and re-runs `setup.sh` on every invocation, so a kept VM follows
+whichever worktree runs it and a changed `setup.sh` reaches it; `incus delete -f
 bencher-dev` resets it entirely. It runs the worktree as it stands, uncommitted changes included,
 which is the point: CI checks out the commit. The `vm` leg needs nested virtualisation on the
 host.
@@ -440,6 +464,14 @@ host.
 On GitHub, nix comes from the pinned `nix-installer-action`; `setup.sh` installs it (a pinned
 installer release) only where it is missing.
 
-`mergeable` is the one required status check on `main`; it needs both `check` and `run`. Open PRs
-as drafts; CI runs when a PR is marked ready, or on demand with `workflow_dispatch`; a newer push
-cancels the PR's running CI.
+CI's `action` job runs the same consumer through the repository's own `action.yml`.
+
+`mergeable` is the one required status check on `main`; it needs `check`, `run` and `action`.
+Open PRs as drafts; CI runs when a PR is marked ready, or on demand with `workflow_dispatch`; a
+newer push cancels the PR's running CI.
+
+### Release
+
+Pushing a tag `v<version>` (matching `pyproject.toml`) runs `release`: each in-repo runner does a
+full run with an empty cache, which forms its L1 image; the tarballs and a `manifest.json` of
+their sha256 digests are attached to the GitHub release.

@@ -13,6 +13,7 @@ if ! incus info "$name" >/dev/null 2>&1; then
   incus config device add "$name" src disk source="$root" path=/src readonly=true
   incus config device override "$name" root size=40GiB
 fi
+incus config device set "$name" src source="$root"
 [ "$(incus list "$name" -f csv -c s)" = RUNNING ] || incus start "$name"
 tries=0
 until incus exec "$name" -- true 2>/dev/null; do

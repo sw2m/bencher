@@ -1,0 +1,75 @@
+name: bencher
+description: Run a bencher benchmark in an Incus instance, with its formed image cached between runs
+author: sw2m
+branding:
+  icon: activity
+  color: purple
+
+inputs:
+  bench:
+    description: The consumer directory holding bench.toml and expect.tsv
+    required: true
+  args:
+    description: Extra arguments to bencher run, such as --set overrides
+    default: ""
+
+outputs:
+  report:
+    description: Path of the report JSON
+    value: ${{ steps.run.outputs.report }}
+  passed:
+    description: Whether the report passed
+    value: ${{ steps.run.outputs.passed }}
+  cache:
+    description: Where the runner image came from, L0 (formed), L1 (release) or L2 (cached)
+    value: ${{ steps.run.outputs.cache }}
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        sudo "$GITHUB_ACTION_PATH/ci/setup.sh" "$USER"
+        mkdir -p ~/.cache/bencher/images
+        touch "$RUNNER_TEMP/bencher.start"
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/bencher/images
+        key: bencher-images-${{ runner.os }}-${{ github.run_id }}
+        restore-keys: bencher-images-${{ runner.os }}-
+    - id: run
+      shell: bash
+      env:
+        BENCH: ${{ inputs.bench }}
+        ARGS: ${{ inputs.args }}
+      run: |
+        ls ~/.cache/bencher/images > "$RUNNER_TEMP/bencher.restored"
+        report="$RUNNER_TEMP/bencher.report.json"
+        echo "report=$report" >> "$GITHUB_OUTPUT"
+        . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+        status=0
+        sg incus-admin -c "nix run 'path:$GITHUB_ACTION_PATH' -- run '$BENCH' --out '$report' $ARGS" || status=$?
+        echo "passed=$(jq -r .pass "$report" 2>/dev/null || echo false)" >> "$GITHUB_OUTPUT"
+        echo "cache=$(jq -r '.cache.level // ""' "$report" 2>/dev/null)" >> "$GITHUB_OUTPUT"
+        echo "status=$status" >> "$GITHUB_OUTPUT"
+    - id: images
+      if: always()
+      shell: bash
+      run: |
+        cd ~/.cache/bencher/images
+        find . -name '*.tar' ! -newer "$RUNNER_TEMP/bencher.start" | while read -r tar; do
+          rm -f -- "$tar" "${tar%.tar}.sha256"
+        done
+        if ls | cmp -s - "$RUNNER_TEMP/bencher.restored"; then
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+        fi
+    - if: always() && steps.images.outputs.changed == 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/bencher/images
+        key: bencher-images-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+    - if: always()
+      shell: bash
+      run: exit "${{ steps.run.outputs.status || 1 }}"
