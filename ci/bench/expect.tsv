@@ -1,6 +1,7 @@
 # name	tags	quantity	op	bound
 spin	{"impl": "sh"}	samples.s.median	<=	{"times": 0.6, "of": {"impl": "ref"}}
 spin	{"impl": "sh"}	telemetry.procstat_cpu_usage.max	>=	50
+spin	{"impl": "sh"}	telemetry.procstat_cpu_usage.max	<=	150
 spin	{"impl": "sh"}	telemetry.custom_value.max	==	42
 parse	{"input": "BOGUS"}	verdict	==	"err"
 parse	{"input": "TCP4:h:1,fork"}	verdict	==	"ok"

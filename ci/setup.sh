@@ -4,12 +4,14 @@ user=$1
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q incus qemu-system-x86 ovmf
-incus admin init --minimal
+if ! incus profile device get default root pool >/dev/null 2>&1; then
+  incus admin init --minimal
+fi
 usermod -aG incus-admin "$user"
-# see https://linuxcontainers.org/incus/docs/main/howto/network_bridge_firewalld/#prevent-connectivity-issues-with-incus-and-docker
+# see https://docs.docker.com/engine/network/packet-filtering-firewalls/#docker-on-a-router
 if command -v iptables >/dev/null; then
   iptables -P FORWARD ACCEPT
 fi
-if ! command -v nix >/dev/null && [ ! -e /nix/var/nix/profiles/default/bin/nix ]; then
-  curl -fsSL https://install.determinate.systems/nix | sh -s -- install --no-confirm
+if ! nix --version >/dev/null 2>&1 && ! /nix/var/nix/profiles/default/bin/nix --version >/dev/null 2>&1; then
+  curl -fsSL https://install.determinate.systems/nix/tag/v3.23.2 | sh -s -- install --no-confirm
 fi

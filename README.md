@@ -205,6 +205,10 @@ entrypoint, `run` on Linux. `image` is `<remote>:<alias>` for the `images` and `
 remotes, or a local alias. Images must carry cloud-init and, for VMs, incus-agent; the
 `images:` remote's `cloud` variants do.
 
+The runner directory is copied into the run share with its symlinks followed, so runners in one
+fixture can share files by linking to each other. A link must resolve inside the fixture checkout
+(`fixture.path`); one that leaves it, or dangles, fails the run at `stage`.
+
 ### The entrypoint
 
 `/var/lib/bencher/runner/run`, started by `bencher-agent run` from its directory in `bench.slice`,
@@ -385,9 +389,16 @@ sg incus-admin -c "ci/e2e.sh runner report.json"
 ```
 
 `ci/dev.sh [runner|vm]` does the same locally, inside an Incus VM shaped like the GitHub runner
-(Ubuntu 24.04, 4 CPUs, 16 GiB, the worktree mounted read-only at `/src`). The VM is kept between
-runs; `incus delete -f bencher-dev` resets it. The `vm` leg needs nested virtualisation on the
+(Ubuntu 24.04, 4 CPUs, 16 GiB, Docker installed as on the runner, the worktree mounted read-only
+at `/src`), and copies the report to `ci/dev/report.<leg>.json` on the host. It re-runs
+`setup.sh` on every invocation, so a changed `setup.sh` reaches a kept VM; `incus delete -f
+bencher-dev` resets it entirely. It runs the worktree as it stands, uncommitted changes included,
+which is the point: CI checks out the commit. The `vm` leg needs nested virtualisation on the
 host.
 
+On GitHub, nix comes from the pinned `nix-installer-action`; `setup.sh` installs it (a pinned
+installer release) only where it is missing.
+
 `mergeable` is the one required status check on `main`; it needs both `check` and `run`. Open PRs
-as drafts; CI runs when a PR is marked ready, or on demand with `workflow_dispatch`.
+as drafts; CI runs when a PR is marked ready, or on demand with `workflow_dispatch`; a newer push
+cancels the PR's running CI.
