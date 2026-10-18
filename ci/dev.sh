@@ -13,6 +13,10 @@ if ! incus info "$name" >/dev/null 2>&1; then
   incus config device add "$name" src disk source="$root" path=/src readonly=true
   incus config device override "$name" root size=40GiB
 fi
+if [ "$(incus config device get "$name" src source)" != "$root" ]; then
+  incus config device set "$name" src source="$root"
+  [ "$(incus list "$name" -f csv -c s)" != RUNNING ] || incus restart "$name"
+fi
 [ "$(incus list "$name" -f csv -c s)" = RUNNING ] || incus start "$name"
 tries=0
 until incus exec "$name" -- true 2>/dev/null; do
@@ -30,5 +34,6 @@ incus exec "$name" -- sh -c 'command -v docker >/dev/null || DEBIAN_FRONTEND=non
 incus exec "$name" -- /src/ci/setup.sh ubuntu
 status=0
 incus exec "$name" -- sudo -iu ubuntu sg incus-admin -c "/src/ci/e2e.sh $leg /tmp/report.json" || status=$?
-incus file pull "$name/tmp/report.json" "$root/ci/dev/report.$leg.json" || true
+mkdir -p "$root/ci/dev"
+incus file pull "$name/tmp/report.json" "$root/ci/dev/report.$leg.json" || echo "ci/dev.sh: no report to pull" >&2
 exit "$status"

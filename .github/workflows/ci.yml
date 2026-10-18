@@ -56,15 +56,34 @@ jobs:
           path: ${{ runner.temp }}/report.json
           if-no-files-found: warn
 
+  action:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: formed
+        uses: ./
+        with:
+          bench: ci/bench
+      - run: '[ "${{ steps.formed.outputs.passed }}" = true ]'
+      - run: sg incus-admin -c "incus image delete bencher/$(jq -r .cache.key '${{ steps.formed.outputs.report }}')"
+      - id: cached
+        uses: ./
+        with:
+          bench: ci/bench
+      - run: '[ "${{ steps.cached.outputs.passed }}" = true ] && [ "${{ steps.cached.outputs.cache }}" = L2 ]'
+
   # The one status to mark required
   mergeable:
     needs:
       - check
       - run
+      - action
     if: always() # report on drafts too, so the status is never stuck "expected"
     runs-on: ubuntu-latest
     steps:
       - run: |
-          echo "check=${{ needs.check.result }} run=${{ needs.run.result }}"
+          echo "check=${{ needs.check.result }} run=${{ needs.run.result }} action=${{ needs.action.result }}"
           [ "${{ needs.check.result }}" = success ]
           [ "${{ needs.run.result }}" = success ]
+          [ "${{ needs.action.result }}" = success ]

@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 user=$1
+command -v apt-get >/dev/null || { echo "ci/setup.sh: needs an apt-based host (Debian or Ubuntu)" >&2; exit 1; }
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q incus qemu-system-x86 ovmf
