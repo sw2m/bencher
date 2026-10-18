@@ -51,8 +51,31 @@ Incus through [pyincusd](https://github.com/sw2m/pyincusd), over the local unix 
 `socket` setting, else the Incus and LXD default sockets in turn). A runner declares whether it
 is a `container` or a `vm`; everything else about the run is identical between the two.
 
-Each instance gets `limits.cpu` and `limits.memory` from the consumer and one read-only disk
-device: the run share at `/bencher/run`.
+Each instance gets `limits.memory` from the consumer, `limits.cpu` as an explicit set of host
+CPUs, and one read-only disk device: the run share at `/bencher/run`.
+
+The CPU set is explicit because Incus rebalances instances given a CPU *count* whenever another
+instance starts or stops, which would move the CPUs out from under the telemetry fence; an
+explicit set is never rebalanced. bencher picks `limits.cpu` CPUs that no instance in any
+project has pinned (by CPU id, or by NUMA node through `limits.cpu.nodes`), under a lock at
+`/tmp/bencher.cpus.lock` held until the instance exists, so concurrent bencher runs on a host
+never pick the same CPUs. It takes **one thread from each of `limits.cpu` untouched physical
+cores**, so telemetry and the benchmark never share a core's execution units, and a core one
+bencher run has touched is left to it; only when there are too few untouched cores does it take
+spare threads of partly used ones. When too few CPUs are free it waits, inside the same
+`limits.provision` budget that resolving the image used, then fails at `launch`; a request
+larger than the host's online CPUs fails at once. A clustered Incus is refused: the pick is
+from the local host's topology.
+
+The guest records the CPU set it fenced, and `bencher-agent check` (run before the entrypoint
+and again after the collector stops) fails the run if that set changed. That catches the fence
+itself moving. It does **not** catch another instance being scheduled onto our CPUs: pinning
+keeps other *bencher* runs off them, but Incus still places count-limited instances anywhere
+once free CPUs run out, and host processes are never excluded. On a host shared with
+oversubscribed count-limited instances, the benchmark can share its CPUs without the run
+noticing (#16). In a VM the guest numbers its vCPUs from 0 regardless of the host ids, and a
+pinned VM's CPUs can't change while it runs, so the check there only confirms what Incus
+already guarantees.
 Containers bind-mount it; VMs get it over virtiofs (9p as fallback), mounted by incus-agent.
 Nothing is written back to the host over the share: the result comes from the entrypoint's
 stdout over the Incus API, and telemetry from the store over the instance's network address.
@@ -100,6 +123,7 @@ entrypoint's environment) and one command, `bencher-agent`, which the host drive
 | `bencher-agent log` | prints the cloud-init output, shown when it fails |
 | `bencher-agent clean` | resets cloud-init's state and empties the machine id before the image is published, so each instance gets its own id without systemd's first-boot presets re-enabling the telemetry services |
 | `bencher-agent provision <seconds>` | waits up to `<seconds>` (the rest of `limits.provision`) for the run share and copies it to local disk (`/var/lib/bencher`), so the measurement never touches a share; fences the CPUs (the first CPU of the instance's affinity to `bencher.slice`, the rest to `bench.slice`, set at runtime with `systemctl set-property` since a container's CPU ids are chosen by Incus per instance); then `salt-call --local state.apply runner` and `state.apply bencher` |
+| `bencher-agent check` | exits 3 if the instance's CPUs are no longer the set `provision` fenced |
 | `bencher-agent run <seconds>` | runs the entrypoint in `bench.slice` with `/etc/bencher/env`, killed after `<seconds>`; its stdout is the result |
 | `bencher-agent flush` | stops the collector, which makes its final gather and flush |
 
@@ -227,8 +251,8 @@ linkup = "../../result/bin/linkup"
 - `limits.cpu` is at least 2: one CPU is fenced for telemetry. `limits.memory` is a byte size
   (`4GiB`, `4GB`, or bytes).
 - Durations are seconds, ISO 8601 (`PT30M`) or `HH:MM:SS`.
-- `limits.provision` bounds forming the runner's image, when no cache level hits, and then,
-  separately, the run's own provisioning. `limits.run` bounds the entrypoint.
+- `limits.provision` bounds launching (resolving or forming the runner's image, then waiting for
+  free CPUs) and then, separately, the run's own provisioning. `limits.run` bounds the entrypoint.
 
 ### `runner.toml` (fixture)
 
@@ -457,6 +481,7 @@ in two shapes (`ci/runner/` as a container, `ci/vm/` as a VM, sharing files by s
 sudo ci/setup.sh "$USER"                    # Incus, nix, and the runner user in incus-admin
 sg incus-admin -c "ci/e2e.sh runner report.json"
 sg incus-admin -c "ci/l1.sh runner l1"
+sg incus-admin -c "ci/pair.sh runner pair"
 ```
 
 `ci/l1.sh <leg> <out> [corrupt]` tests L1 without a release. It exports the image `e2e.sh`
@@ -467,7 +492,10 @@ and an empty scratch `BENCHER_CACHE`, a run must report `L1`. With `corrupt`, th
 is truncated, and the run must log that it "fails its digest" and fall back to `L0`; CI does that
 on the container leg only, since the fallback doesn't depend on the instance type.
 
-`ci/dev.sh [runner|vm] [e2e|l1]` does the same locally, inside an Incus VM shaped like the GitHub runner
+`ci/pair.sh` runs two benches on one host, the second started while the first is executing,
+and requires both to pass on disjoint CPU sets that never moved.
+
+`ci/dev.sh [runner|vm] [e2e|l1|pair]` does the same locally, inside an Incus VM shaped like the GitHub runner
 (Ubuntu 24.04, 4 CPUs, 16 GiB, Docker installed as on the runner, the worktree mounted read-only
 at `/src`), and copies the reports to `ci/dev/` on the host. It re-points `/src`
 at the invoking worktree and re-runs `setup.sh` on every invocation, so a kept VM follows

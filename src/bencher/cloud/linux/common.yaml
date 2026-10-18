@@ -28,6 +28,10 @@ write_files:
         wait) exec cloud-init status --wait ;;
         log) exec cat /var/log/cloud-init-output.log ;;
         flush) exec systemctl stop telegraf.service ;;
+        check)
+          [ -f /run/bencher/cpus ] || { echo "bencher: no fenced CPU set recorded; provision did not run" >&2; exit 3; }
+          now=$(python3 -c 'import os; print(*sorted(os.sched_getaffinity(0)))')
+          [ "$now" = "$(cat /run/bencher/cpus)" ] || { echo "bencher: the instance's CPUs moved since they were fenced ($(cat /run/bencher/cpus) -> $now), so the fence does not hold" >&2; exit 3; } ;;
         run)
           [ -x "$entry" ] || { echo "bencher: $entry is not an executable entrypoint" >&2; exit 2; }
           status=0
@@ -45,6 +49,7 @@ write_files:
           timeout "$2" sh -c 'until [ -d /bencher/run/runner ]; do sleep 1; done'
           rm -rf /var/lib/bencher && mkdir -p /var/lib/bencher && cp -a /bencher/run/. /var/lib/bencher/
           set -- $(python3 -c 'import os; print(*sorted(os.sched_getaffinity(0)))')
+          mkdir -p /run/bencher && echo "$@" > /run/bencher/cpus
           [ "$#" -ge 2 ] || { echo "bencher: telemetry fencing needs 2 CPUs, the instance has $#" >&2; exit 1; }
           systemctl set-property --runtime bencher.slice "AllowedCPUs=$1"
           shift
@@ -57,7 +62,7 @@ write_files:
           cloud-init clean --logs
           # see https://www.freedesktop.org/software/systemd/man/latest/machine-id.html#First%20Boot%20Semantics
           exec truncate -s 0 /etc/machine-id ;;
-        *) echo "usage: bencher-agent wait|log|clean|flush|provision <seconds>|run <seconds>" >&2; exit 2 ;;
+        *) echo "usage: bencher-agent wait|log|clean|flush|check|provision <seconds>|run <seconds>" >&2; exit 2 ;;
       esac
   - path: /etc/systemd/system/victoria-metrics.service.d/bencher.conf
     content: |

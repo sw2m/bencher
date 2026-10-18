@@ -49,7 +49,11 @@ class Agent:
         self.log.write(done.stdout)
         self.log.write(done.stderr)
         if done.code != 0:
-            raise Failure(f"bencher-agent {verb} exited {done.code}")
+            lines = done.stderr.decode(errors="replace").strip().splitlines()
+            errors = [line for line in lines if "[ERROR" in line]
+            last = (errors or lines)[-1:]
+            reason = f": {last[0].strip()}" if last else ""
+            raise Failure(f"bencher-agent {verb} exited {done.code}{reason}")
 
     async def run(self, seconds: int) -> Exec:
         done = await self.call("run", str(seconds), timeout=seconds + 120)

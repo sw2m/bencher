@@ -50,6 +50,8 @@ jobs:
       - run: sudo ci/setup.sh "$USER"
       - run: sg incus-admin -c "ci/e2e.sh ${{ matrix.runner }} $RUNNER_TEMP/report.json"
       - run: sg incus-admin -c "ci/l1.sh ${{ matrix.runner }} $RUNNER_TEMP/l1 ${{ matrix.runner == 'runner' && 'corrupt' || '' }}"
+      - if: matrix.runner == 'runner'
+        run: sg incus-admin -c "ci/pair.sh runner $RUNNER_TEMP/pair"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -57,6 +59,7 @@ jobs:
           path: |
             ${{ runner.temp }}/report.json
             ${{ runner.temp }}/l1/
+            ${{ runner.temp }}/pair/
           if-no-files-found: warn
 
   action:

@@ -5,8 +5,8 @@ name=bencher-dev
 leg=${1:-runner}
 check=${2:-e2e}
 case "$leg:$check" in
-  runner:e2e|runner:l1|vm:e2e|vm:l1) ;;
-  *) echo "usage: ci/dev.sh [runner|vm] [e2e|l1]" >&2; exit 2 ;;
+  runner:e2e|runner:l1|runner:pair|vm:e2e|vm:l1|vm:pair) ;;
+  *) echo "usage: ci/dev.sh [runner|vm] [e2e|l1|pair]" >&2; exit 2 ;;
 esac
 if ! incus info "$name" >/dev/null 2>&1; then
   incus init -q images:ubuntu/24.04/cloud "$name" --vm \
@@ -39,6 +39,12 @@ case "$check" in
   e2e)
     incus exec "$name" -- sudo -iu ubuntu sg incus-admin -c "/src/ci/e2e.sh $leg /tmp/report.json" || status=$?
     incus file pull "$name/tmp/report.json" "$root/ci/dev/report.$leg.json" || echo "ci/dev.sh: no report to pull" >&2
+    ;;
+  pair)
+    incus exec "$name" -- rm -rf "/tmp/pair.$leg"
+    incus exec "$name" -- sudo -iu ubuntu sg incus-admin -c "/src/ci/pair.sh $leg /tmp/pair.$leg" || status=$?
+    rm -rf "$root/ci/dev/pair.$leg"
+    incus file pull -r "$name/tmp/pair.$leg" "$root/ci/dev/" || echo "ci/dev.sh: no reports to pull" >&2
     ;;
   l1)
     incus exec "$name" -- rm -rf "/tmp/l1.$leg"
