@@ -105,7 +105,7 @@ that behaves the same under any init system. It is internal: overlays live only 
 runners provision through Salt.
 
 For Linux the layers install Salt (`salt-common`), Telegraf and VictoriaMetrics from their
-signed repositories at pinned versions, write the Salt minion config, declare two slices
+signed repositories, and Python 3 from the distro, at pinned versions, write the Salt minion config, declare two slices
 (`bencher.slice` for telemetry, `bench.slice` for the benchmark), write the systemd drop-ins that
 put both telemetry services in `bencher.slice`, and disable the telemetry services, so the
 formed image boots without recording. Nothing in the layers depends on a run: everything per run
@@ -282,6 +282,10 @@ with the environment in `/etc/bencher/env`:
 | `BENCHER_REPORTERS` | where to write `<reporter>.pid` |
 | `BENCHER_PUSH_UDP`, `BENCHER_PUSH_HTTP` | the push endpoints above |
 
+- **language**: any executable the guest can run, started through its shebang. Every guest
+  has `python3` (3.11 or later) on `PATH`, so an entrypoint written in Python 3 against the
+  standard library runs in every OS family bencher wires, which a shell script doesn't (#3).
+  Anything else it needs, the runner's Salt states install.
 - **stdout** is the result and nothing else. Anything that is not one result document fails
   validation.
 - **stderr** is the log; bencher echoes it to its own stderr.
@@ -392,8 +396,9 @@ refuses a report with `errors`), printing every change:
 
 ## Operating systems
 
-An OS family is wired when it has cloud layers, and those layers provide `bencher-agent` and
-`/etc/bencher/env` (or their family's equivalents). **Linux** (Debian bookworm) is wired.
+An OS family is wired when it has cloud layers, and those layers provide `bencher-agent`,
+`/etc/bencher/env` (or their family's equivalents) and `python3` on `PATH`, the one language an
+entrypoint can count on in every family. **Linux** (Debian bookworm) is wired.
 **Windows** (Cloudbase-Init, a virtiofs automounter service, a PowerShell `bencher-agent`) and
 **BSD** (cloud-init, a 9p or virtiofs client) are paved by the same layers and contracts, and
 fail at `launch` until wired (#3).
