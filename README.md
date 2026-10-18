@@ -8,6 +8,12 @@ collected inside the runner, checked against the consumer's committed expectatio
 bencher cares only that a run is sandboxed and that its output is compliant with the schemas
 below. What happens inside a runner is the runner's business.
 
+## Status
+
+The maintainer doesn't like this repo and considers it slop. It exists as a means to an end,
+benchmarking pdbd, not as a tool they'd choose or recommend, and it gets only the care that end
+needs. Expect it to be replaced rather than polished.
+
 ## Ownership
 
 Three kinds of repository take part in a benchmark:
