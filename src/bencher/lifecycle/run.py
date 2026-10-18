@@ -64,7 +64,7 @@ class Run:
     async def create(self, incus: Incus) -> None:
         plan = self.plan
         limit = plan.bench.limits.provision.total_seconds()
-        image = Image(plan.runner, self.settings.cache, self.log)
+        image = Image(plan.runner, self.settings.cache, self.settings.l1, self.log)
         self.cache = await image.ensure(incus, limit)
         self.log.say(f"launch {self.name}: {plan.runner.type} {image.alias}")
         self.share.path.mkdir(parents=True, exist_ok=True)

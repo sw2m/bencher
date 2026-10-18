@@ -122,7 +122,7 @@ tarball to re-form.
 | Level | Where | Hit when |
 | --- | --- | --- |
 | L2 | the Incus image `bencher/<key>`, else `<cache>/images/<key>.tar` (imported), checked against `<key>.sha256` beside it | this machine formed or fetched it before |
-| L1 | `<key>.tar` on the GitHub release `v<version>`, checked against the release's `manifest.json` | a release formed the same image and type |
+| L1 | `<key>.tar` from the `l1` source (by default the GitHub release `v<version>`), checked against the source's `manifest.json` | a release formed the same image and type |
 | L0 | formed locally, then exported to `<cache>/images/<key>.tar` | nothing else hits |
 
 A release forms L1 images for the in-repo runners (`images:debian/12/cloud`, as a container and
@@ -406,7 +406,8 @@ repository (`bencher-images-<os>-`): keys are content-addressed, so benches shar
 cache is bounded by GitHub's eviction. Its outputs are `report` (the report JSON's path),
 `passed`, and `cache`, the report's cache level (`L0`, `L1` or `L2`); the step fails when the
 report does. `args` is split on whitespace and passed as arguments, never evaluated by a shell,
-so it can't carry a value with spaces. bencher itself is pinned by the action's ref.
+so it can't carry a value with spaces. `cache: "false"` skips the Actions cache, so on a runner
+without the Incus image already present the run resolves L1 or L0. bencher itself is pinned by the action's ref.
 
 ### Operator settings
 
@@ -418,6 +419,7 @@ come before the verb (`bencher --socket … run …`); a verb's own settings nes
 | --- | --- | --- | --- | --- |
 | socket | `--socket` | `BENCHER_SOCKET` | `socket` | the Incus and LXD default sockets |
 | cache | `--cache` | `BENCHER_CACHE` | `cache` | `$XDG_CACHE_HOME/bencher` |
+| l1 | `--l1` | `BENCHER_L1` | `l1` | `https://github.com/sw2m/bencher/releases/download/v{version}/{file}` |
 | keep | `run --keep` | `BENCHER_RUN__KEEP` | `[run] keep` | `false`: delete the instance after the run |
 | out | `run --out` | `BENCHER_RUN__OUT` | `[run] out` | stdout |
 
@@ -454,11 +456,20 @@ in two shapes (`ci/runner/` as a container, `ci/vm/` as a VM, sharing files by s
 ```sh
 sudo ci/setup.sh "$USER"                    # Incus, nix, and the runner user in incus-admin
 sg incus-admin -c "ci/e2e.sh runner report.json"
+sg incus-admin -c "ci/l1.sh runner l1"
 ```
 
-`ci/dev.sh [runner|vm]` does the same locally, inside an Incus VM shaped like the GitHub runner
+`ci/l1.sh <leg> <out> [corrupt]` tests L1 without a release. It exports the image `e2e.sh`
+formed and serves it, with a `manifest.json`, from a scratch directory through Python's
+`http.server` on `127.0.0.1` (one process binds port 0 and reports it, so there is no port
+race), behind a 302 redirect as GitHub's release downloads have. With the Incus image removed
+and an empty scratch `BENCHER_CACHE`, a run must report `L1`. With `corrupt`, the served tarball
+is truncated, and the run must log that it "fails its digest" and fall back to `L0`; CI does that
+on the container leg only, since the fallback doesn't depend on the instance type.
+
+`ci/dev.sh [runner|vm] [e2e|l1]` does the same locally, inside an Incus VM shaped like the GitHub runner
 (Ubuntu 24.04, 4 CPUs, 16 GiB, Docker installed as on the runner, the worktree mounted read-only
-at `/src`), and copies the report to `ci/dev/report.<leg>.json` on the host. It re-points `/src`
+at `/src`), and copies the reports to `ci/dev/` on the host. It re-points `/src`
 at the invoking worktree and re-runs `setup.sh` on every invocation, so a kept VM follows
 whichever worktree runs it and a changed `setup.sh` reaches it; `incus delete -f
 bencher-dev` resets it entirely. It runs the worktree as it stands, uncommitted changes included,
@@ -474,12 +485,18 @@ import the tarball the first one cached and report `L2`.
 
 `mergeable` is the one required status check on `main`; it needs `check`, `run` and `action`.
 Open PRs as drafts; CI runs when a PR is marked ready, or on demand with `workflow_dispatch`; a
-newer push cancels the PR's running CI.
+newer push cancels the PR's running CI. Draft and ready runs are cancelled separately, so the
+draft-skipping run a push makes can't cancel the ready run that marking the PR ready makes.
 
 ### Release
 
 Pushing a tag `v<version>` (matching `pyproject.toml`) runs `release`: each in-repo runner does a
 full run with an empty cache, which forms its L1 image; the tarballs and a `manifest.json` of
 their sha256 digests are attached to the GitHub release, and each leg's report is kept as an
-artifact. Publishing waits for every leg; re-running the failed jobs completes a partial
-release, since publishing uploads over an existing release rather than failing on it.
+artifact. The release is published as a **prerelease**. `verify` then downloads the action
+exactly as a consumer receives it (GitHub's tarball of the tag), runs it from a cold cache for
+each runner, and requires `cache: L1`; that proves the assets, the manifest, and that a
+consumer computes the same keys the release formed. Only then does `promote` turn it into a
+full release; GitHub treats the newest full release as latest. Publishing waits for every leg; re-running the failed jobs completes a partial
+release, since publishing uploads over an existing prerelease rather than failing on it. A
+release that has already been promoted is never touched again: its assets are immutable.

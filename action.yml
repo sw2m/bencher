@@ -12,6 +12,9 @@ inputs:
   args:
     description: Extra arguments to bencher run, split on whitespace and never evaluated by a shell, such as --set limits.cpu=2
     default: ""
+  cache:
+    description: Restore and save runner images through the Actions cache ("false" makes a run resolve L1 or L0, on a runner without the Incus image already present)
+    default: "true"
 
 outputs:
   report:
@@ -33,7 +36,8 @@ runs:
         sudo "$GITHUB_ACTION_PATH/ci/setup.sh" "$USER"
         mkdir -p ~/.cache/bencher/images
         echo "key=bencher-images-$RUNNER_OS-$(cat /proc/sys/kernel/random/uuid)" >> "$GITHUB_OUTPUT"
-    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+    - if: inputs.cache == 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.cache/bencher/images
         key: ${{ steps.setup.outputs.key }}
@@ -65,7 +69,7 @@ runs:
         echo "key=$(jq -r '.cache.key // ""' "$report" 2>/dev/null)" >> "$GITHUB_OUTPUT"
         echo "status=$status" >> "$GITHUB_OUTPUT"
     - id: images
-      if: always() && steps.run.outcome == 'success'
+      if: always() && steps.run.outcome == 'success' && inputs.cache == 'true'
       shell: bash
       env:
         KEY: ${{ steps.run.outputs.key }}

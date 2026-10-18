@@ -23,13 +23,12 @@ from bencher.host.log import Log
 from bencher.host.store import Store
 from bencher.host.target import Target
 
-release = "https://github.com/sw2m/bencher/releases/download/v{version}/{file}"
-
 
 class Image:
-    def __init__(self, runner: Runner, cache: Path, log: Log) -> None:
+    def __init__(self, runner: Runner, cache: Path, source: str, log: Log) -> None:
         self.runner = runner
         self.images = cache / "images"
+        self.source = source
         self.log = log
         self.version = metadata.version("bencher")
         self.deadline = 0.0
@@ -108,7 +107,7 @@ class Image:
             self.discard()
         level: Literal["L1", "L2"] = "L2"
         if not self.tarball.exists() and await self.fetch():
-            self.log.say(f"image {self.alias}: downloaded release v{self.version}")
+            self.log.say(f"image {self.alias}: downloaded {self.url(f'{self.key}.tar')}")
             level = "L1"
         if self.tarball.exists():
             self.log.say(f"image {self.alias}: importing {self.tarball}")
@@ -139,12 +138,16 @@ class Image:
         self.log.say(f"image {self.alias}: made concurrently by another run; using it")
         return True
 
+    def url(self, file: str) -> str:
+        return self.source.format(version=self.version, file=file)
+
     async def fetch(self) -> bool:
-        url = release.format(version=self.version, file="manifest.json")
         try:
+            url = self.url("manifest.json")
             async with httpx.AsyncClient(follow_redirects=True, timeout=600) as client:
                 response = await client.get(url)
                 if response.status_code == 404:
+                    self.log.say(f"no L1 image at {url}, forming locally")
                     return False
                 response.raise_for_status()
                 manifest = response.json()
@@ -152,7 +155,7 @@ class Image:
                 if expected is None:
                     return False
                 sha = hashlib.sha256()
-                url = release.format(version=self.version, file=f"{self.key}.tar")
+                url = self.url(f"{self.key}.tar")
                 async with client.stream("GET", url) as stream:
                     stream.raise_for_status()
                     with self.partial.open("wb") as file:
@@ -160,11 +163,11 @@ class Image:
                             sha.update(chunk)
                             file.write(chunk)
         except (httpx.HTTPError, ValueError, OSError) as error:
-            self.log.say(f"release image unavailable, forming locally: {error}")
+            self.log.say(f"L1 image unavailable, forming locally: {error}")
             self.partial.unlink(missing_ok=True)
             return False
         if sha.hexdigest() != expected:
-            self.log.say(f"release image {self.key}.tar fails its digest, forming locally")
+            self.log.say(f"L1 image {self.key}.tar fails its digest, forming locally")
             self.partial.unlink(missing_ok=True)
             return False
         self.partial.rename(self.tarball)
