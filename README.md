@@ -16,12 +16,13 @@ Three kinds of repository take part in a benchmark:
 | --- | --- |
 | **bencher** (this repo) | the host orchestrator, the cloud-init layers (the runner's base: Salt, Telegraf, VictoriaMetrics), every schema, statistics, expectation evaluation |
 | **fixture repo** (e.g. `sw2m/pdbd-bench`) | runners: an image, Salt states, an entrypoint, declared reporters |
-| **consumer** (e.g. `sw2m/pdbd`) | every decision: `bench.toml` (which bencher, which fixture runner, artifacts, params, limits), `expect.tsv`, and the checkout of the fixture repo |
+| **consumer** (e.g. `sw2m/pdbd`) | every decision: `bench.toml` (which fixture runner, artifacts, params, limits), `expect.tsv`, and which bencher and which fixture checkout it runs |
 
 Pins follow ownership. Everything bencher installs is pinned by package version in its cloud
 layers and verified by the vendor's signed repository. The fixture repo is pinned by the
 consumer's own checkout of it (a flake input in `flake.lock`, or a CI checkout at a ref);
-bencher only reads it from a path. Comparators inside a runner float unless the consumer pins
+bencher only reads it from a path. bencher itself is pinned the same way, by the consumer's flake
+input or action ref. Comparators inside a runner float unless the consumer pins
 them through a param the runner reads, by the runner's own convention (e.g. `[params.pins]`).
 
 ## A run
@@ -160,9 +161,6 @@ milliseconds apart still sum into one point).
 ### `bench.toml` (consumer)
 
 ```toml
-[bencher]
-ref = "v0.1.0" # which bencher the consumer's CI runs
-
 [fixture]
 path = "../../../bench" # the consumer's checkout of sw2m/pdbd-bench
 runner = "transport"
