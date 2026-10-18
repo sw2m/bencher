@@ -485,7 +485,8 @@ import the tarball the first one cached and report `L2`.
 
 `mergeable` is the one required status check on `main`; it needs `check`, `run` and `action`.
 Open PRs as drafts; CI runs when a PR is marked ready, or on demand with `workflow_dispatch`; a
-newer push cancels the PR's running CI.
+newer push cancels the PR's running CI. Draft and ready runs are cancelled separately, so the
+draft-skipping run a push makes can't cancel the ready run that marking the PR ready makes.
 
 ### Release
 
