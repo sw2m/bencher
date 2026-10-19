@@ -401,8 +401,9 @@ refuses a report with `errors`), printing every change:
 - an exact `verdict == …` rule (tags equal to a row's full tags) is updated to that row's
   verdict;
 - an exact rule whose row is gone, and that matches no row at all, is dropped;
-- a broader `verdict ==` rule is kept verbatim; rows it already asserts get no exact rule, and rows
-  that now contradict it are reported;
+- a broader `verdict ==` rule is kept verbatim; rows it already asserts get no exact rule, unless a
+  `rules` rule covers them (a broad rule never decides a row for coverage), and rows that now
+  contradict it are reported;
 - every other verdict row gets a new exact rule, appended, so a blessed file satisfies its own
   `rules` rules over verdict rows; over measure rows, decided only by hand-set bounds, it can't;
 - every other line (comments, measure and `rules` rules) is kept verbatim. Measure bounds are
