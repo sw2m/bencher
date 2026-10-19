@@ -13,6 +13,7 @@ from bencher.contract.output.outcome import Outcome
 from bencher.contract.output.row import Verdict
 from bencher.expect.quantity import Quantity
 from bencher.expect.relative import Relative
+from bencher.expect.table import Key, Table
 
 ops: dict[str, Callable[[float, float], bool]] = {
     "<": operator.lt,
@@ -22,7 +23,6 @@ ops: dict[str, Callable[[float, float], bool]] = {
     ">=": operator.ge,
     ">": operator.gt,
 }
-Index = dict[tuple[str, tuple[tuple[str, str], ...]], Line]
 
 
 class Rule(Model):
@@ -41,6 +41,8 @@ class Rule(Model):
             raise ValueError('verdict rules take an "ok"/"err" bound, and only they do')
         if verdict and self.op not in ("==", "!="):
             raise ValueError("verdict rules compare with == or !=")
+        if self.quantity.kind == "rules" and isinstance(self.bound, Relative):
+            raise ValueError("a rules quantity takes a number bound")
         return self
 
     def matches(self, row: Line) -> bool:
@@ -49,16 +51,18 @@ class Rule(Model):
     def owned(self) -> bool:
         return self.quantity.kind == "verdict" and self.op == "=="
 
-    def threshold(self, row: Line, index: Index) -> tuple[float | str | None, str | None]:
+    def threshold(
+        self, row: Line, table: Table, counts: dict[Key, int]
+    ) -> tuple[float | str | None, str | None]:
         if not isinstance(self.bound, Relative):
             return self.bound, None
         tags = {**row.tags, **self.bound.of}
         if tags == row.tags:
             return None, f"{row.name} {dict(row.tags)} is its own reference"
-        reference = index.get((row.name, tuple(sorted(tags.items()))))
+        reference = table.get(row.name, tags)
         if reference is None:
             return None, f"no reference row {row.name} {tags}"
-        base = self.quantity.read(reference)
+        base = self.quantity.read(reference, counts)
         if not isinstance(base, float):
             return None, f"reference row {row.name} {tags} has no value for this quantity"
         return self.bound.times * base, None
@@ -70,18 +74,17 @@ class Rule(Model):
             return (actual == bound) == (self.op == "==")
         return ops[self.op](actual, bound)
 
-    def check(self, rows: list[Line]) -> Outcome:
-        matched = [row for row in rows if self.matches(row)]
+    def check(self, table: Table, counts: dict[Key, int]) -> Outcome:
+        matched = table.select(self.name, self.tags)
         if not matched:
             return Outcome(
                 line=self.line, rule=self.raw, checks=[], passed=False, error="matches no row"
             )
-        index = {row.key(): row for row in rows}
         checks = []
         problems = []
         for row in matched:
-            actual = self.quantity.read(row)
-            bound, problem = self.threshold(row, index)
+            actual = self.quantity.read(row, counts)
+            bound, problem = self.threshold(row, table, counts)
             if problem:
                 problems.append(problem)
             checks.append(

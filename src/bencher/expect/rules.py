@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from bencher.contract.output.line import Line
 from bencher.contract.output.outcome import Outcome
 from bencher.contract.reason import Reason
 from bencher.expect.rule import Rule
+from bencher.expect.table import Table
 from bencher.expect.tsv import Tsv
 
 columns = ["name", "tags", "quantity", "op", "bound"]
@@ -52,10 +54,19 @@ class Rules:
         return cls.parse(path.read_text()) if path.exists() else None
 
     def check(self, rows: list[Line]) -> list[Outcome]:
-        return [rule.check(rows) for rule in self.rules.values()]
+        table = Table(rows)
+        counted = any(rule.quantity.kind == "rules" for rule in self.rules.values())
+        exact = (
+            table.get(rule.name, rule.tags)
+            for rule in self.rules.values()
+            if counted and rule.quantity.kind != "rules"
+        )
+        counts = Counter(row.key() for row in exact if row is not None)
+        return [rule.check(table, counts) for rule in self.rules.values()]
 
     def bless(self, rows: list[Line]) -> tuple[str, list[str]]:
         verdicts = {(line.name, self.canon(line.tags)): line for line in rows if line.verdict}
+        coverage = [rule for rule in self.rules.values() if rule.quantity.kind == "rules"]
         covered: set[tuple[str, str]] = set()
         changes: list[str] = []
         out: list[str] = []
@@ -79,7 +90,8 @@ class Rules:
             out.append(raw)
             for line in matched:
                 if line.verdict == rule.bound:
-                    covered.add((line.name, self.canon(line.tags)))
+                    if not any(c.matches(line) for c in coverage):
+                        covered.add((line.name, self.canon(line.tags)))
                 else:
                     changes.append(
                         f"kept line {number}, but {line.name} {self.canon(line.tags)} is now"
