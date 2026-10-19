@@ -24,24 +24,33 @@ outputs:
     description: Whether the report passed
     value: ${{ steps.run.outputs.passed }}
   cache:
-    description: Where the runner image came from, L0 (formed), L1 (release) or L2 (cached)
+    description: Where the runner image came from, L0 (formed, or primed for a provisioned image), L1 (release) or L2 (cached)
     value: ${{ steps.run.outputs.cache }}
+  kind:
+    description: What the runner image is, base or provisioned (see the bench's cache)
+    value: ${{ steps.run.outputs.kind }}
 
 runs:
   using: composite
   steps:
     - id: setup
       shell: bash
+      env:
+        BENCH: ${{ inputs.bench }}
       run: |
         sudo "$GITHUB_ACTION_PATH/ci/setup.sh" "$USER"
         mkdir -p ~/.cache/bencher/images
-        echo "key=bencher-images-$RUNNER_OS-$(cat /proc/sys/kernel/random/uuid)" >> "$GITHUB_OUTPUT"
+        bench=$(printf '%s' "$BENCH" | sha256sum | cut -c1-16)
+        echo "prefix=bencher-images-$RUNNER_OS-$bench-" >> "$GITHUB_OUTPUT"
+        echo "key=bencher-images-$RUNNER_OS-$bench-$(cat /proc/sys/kernel/random/uuid)" >> "$GITHUB_OUTPUT"
     - if: inputs.cache == 'true'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.cache/bencher/images
         key: ${{ steps.setup.outputs.key }}
-        restore-keys: bencher-images-${{ runner.os }}-
+        restore-keys: |
+          ${{ steps.setup.outputs.prefix }}
+          bencher-images-${{ runner.os }}-
     - id: run
       shell: bash
       env:
@@ -66,17 +75,21 @@ runs:
         sg incus-admin -c "$command" || status=$?
         echo "passed=$(jq -r .pass "$report" 2>/dev/null || echo false)" >> "$GITHUB_OUTPUT"
         echo "cache=$(jq -r '.cache.level // ""' "$report" 2>/dev/null)" >> "$GITHUB_OUTPUT"
+        echo "kind=$(jq -r '.cache.kind // ""' "$report" 2>/dev/null)" >> "$GITHUB_OUTPUT"
         echo "key=$(jq -r '.cache.key // ""' "$report" 2>/dev/null)" >> "$GITHUB_OUTPUT"
+        echo "base=$(jq -r '.cache.base.key // ""' "$report" 2>/dev/null)" >> "$GITHUB_OUTPUT"
         echo "status=$status" >> "$GITHUB_OUTPUT"
     - id: images
       if: always() && steps.run.outcome == 'success' && inputs.cache == 'true'
       shell: bash
       env:
         KEY: ${{ steps.run.outputs.key }}
+        BASE: ${{ steps.run.outputs.base }}
       run: |
         cd ~/.cache/bencher/images
         if [ -n "$KEY" ]; then
-          find . -maxdepth 1 -type f ! -name "$KEY.tar" ! -name "$KEY.sha256" -delete
+          find . -maxdepth 1 -type f ! -name "$KEY.tar" ! -name "$KEY.sha256" \
+            ! -name "${BASE:-$KEY}.tar" ! -name "${BASE:-$KEY}.sha256" -delete
         fi
         if ls | cmp -s - "$RUNNER_TEMP/bencher.restored"; then
           echo "changed=false" >> "$GITHUB_OUTPUT"

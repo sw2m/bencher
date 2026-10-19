@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import shutil
 from importlib import resources
 from pathlib import Path
@@ -10,6 +12,7 @@ import yaml
 
 from bencher.contract.input.bench import Bench
 from bencher.contract.input.runner import Runner
+from bencher.host.failure import Failure
 
 
 class Share:
@@ -25,6 +28,7 @@ class Share:
         artifacts = self.artifacts(root, bench)
         self.params(bench)
         self.pillar(bench, runner, artifacts)
+        self.write()
         self.publish()
 
     def states(self) -> None:
@@ -61,18 +65,36 @@ class Share:
     def pillar(self, bench: Bench, runner: Runner, artifacts: dict[str, str]) -> None:
         seconds = bench.telemetry.interval.total_seconds()
         ready = max(60, int(3 * seconds) + 1)  # the first gather lands within 2 intervals
-        data: dict[str, Any] = {
+        self.data: dict[str, Any] = {
             "bencher": {
                 "params": bench.params,
                 "artifacts": artifacts,
                 "reporters": runner.reporters,
                 "telemetry": {"interval": f"{int(seconds * 1000)}ms", "ready": ready},
+                "phase": "run",
+                "resolved": {},
             }
         }
+
+    def write(self) -> None:
         pillar = self.inputs / "pillar"
-        pillar.mkdir()
+        pillar.mkdir(exist_ok=True)
         (pillar / "top.sls").write_text(yaml.safe_dump({"base": {"*": ["bencher"]}}))
-        (pillar / "bencher.sls").write_text(yaml.safe_dump(data))
+        (pillar / "bencher.sls").write_text(yaml.safe_dump(self.data))
+        resolved = self.data["bencher"]["resolved"]
+        (self.inputs / "resolved.json").write_bytes(pydantic_core.to_json(resolved) + b"\n")
+
+    @property
+    def resolver(self) -> bool:
+        resolve = self.path / "runner" / "resolve"
+        if resolve.exists() and not os.access(resolve, os.X_OK):
+            raise Failure(f"the runner's {resolve.name} is not executable")
+        return resolve.exists()
+
+    def resolve(self, resolved: dict[str, Any]) -> None:
+        self.data["bencher"]["resolved"] = json.loads(json.dumps(resolved, sort_keys=True))
+        self.write()
+        self.publish()
 
     def publish(self) -> None:
         for path in [self.path, *self.path.rglob("*")]:
@@ -80,6 +102,14 @@ class Share:
                 path.chmod(0o755)
             else:
                 path.chmod(0o755 if path.stat().st_mode & 0o111 else 0o644)
+
+    def device(self) -> dict[str, str]:
+        return {
+            "type": "disk",
+            "source": str(self.path),
+            "path": "/bencher/run",
+            "readonly": "true",
+        }
 
     def remove(self) -> None:
         shutil.rmtree(self.path, ignore_errors=True)

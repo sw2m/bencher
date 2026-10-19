@@ -23,11 +23,28 @@ class Cpus:
         self.fd: int | None = None
         self.cores: list[list[Thread]] = []
 
-    async def __aenter__(self) -> Cpus:
-        fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o666)
-        try:
-            with contextlib.suppress(PermissionError):
+    @classmethod
+    def open(cls) -> int:
+        flags = os.O_RDWR | os.O_NOFOLLOW
+        while True:
+            # see https://docs.kernel.org/admin-guide/sysctl/fs.html#protected-regular
+            try:
+                return os.open(cls.path, flags)
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                raise Failure(
+                    f"CPU lock {cls.path}: {error.strerror}; it must be a regular file "
+                    "that every bencher user can open read-write (mode 0666)"
+                ) from None
+            with contextlib.suppress(FileExistsError):
+                fd = os.open(cls.path, flags | os.O_CREAT | os.O_EXCL, 0o666)
                 os.fchmod(fd, 0o666)
+                return fd
+
+    async def __aenter__(self) -> Cpus:
+        fd = self.open()
+        try:
             while True:
                 try:
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
