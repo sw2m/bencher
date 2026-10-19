@@ -64,7 +64,8 @@ instance starts or stops, which would move the CPUs out from under the telemetry
 explicit set is never rebalanced. bencher picks `limits.cpu` CPUs that no instance in any
 project has pinned (by CPU id, or by NUMA node through `limits.cpu.nodes`), under a lock at
 `/tmp/bencher.cpus.lock` held until the instance exists, so concurrent bencher runs on a host
-never pick the same CPUs. It takes **one thread from each of `limits.cpu` untouched physical
+never pick the same CPUs. The lock is created once, mode `0666`, and opened without `O_CREAT`
+afterwards, since `fs.protected_regular` refuses a create-open of another user's file in `/tmp`. It takes **one thread from each of `limits.cpu` untouched physical
 cores**, so telemetry and the benchmark never share a core's execution units, and a core one
 bencher run has touched is left to it; only when there are too few untouched cores does it take
 spare threads of partly used ones. When too few CPUs are free it waits, inside the same
