@@ -7,8 +7,7 @@ on:
     types:
       - opened
 
-permissions:
-  pull-requests: write
+permissions: {}
 
 jobs:
   to-draft:
@@ -20,7 +19,7 @@ jobs:
     steps:
       - name: convert to draft
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.DRAFT_GUARD }} # see sw2m/bencher#21
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
