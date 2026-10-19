@@ -81,5 +81,13 @@ class Share:
             else:
                 path.chmod(0o755 if path.stat().st_mode & 0o111 else 0o644)
 
+    def device(self) -> dict[str, str]:
+        return {
+            "type": "disk",
+            "source": str(self.path),
+            "path": "/bencher/run",
+            "readonly": "true",
+        }
+
     def remove(self) -> None:
         shutil.rmtree(self.path, ignore_errors=True)

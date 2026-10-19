@@ -24,6 +24,15 @@ write_files:
       #!/bin/sh
       set -eu
       entry=/var/lib/bencher/runner/run
+      stage() {
+        timeout "$1" sh -c 'until [ -d /bencher/run/runner ]; do sleep 1; done'
+        rm -rf /var/lib/bencher && mkdir -p /var/lib/bencher && cp -a /bencher/run/. /var/lib/bencher/
+      }
+      runner() {
+        if [ -f /var/lib/bencher/runner/salt/runner.sls ]; then
+          salt-call --local --retcode-passthrough --state-output=changes state.apply runner
+        fi
+      }
       case "${1:-}" in
         wait) exec cloud-init status --wait ;;
         log) exec cat /var/log/cloud-init-output.log ;;
@@ -46,23 +55,24 @@ write_files:
           exit "$status" ;;
         provision)
           systemctl daemon-reload
-          timeout "$2" sh -c 'until [ -d /bencher/run/runner ]; do sleep 1; done'
-          rm -rf /var/lib/bencher && mkdir -p /var/lib/bencher && cp -a /bencher/run/. /var/lib/bencher/
+          stage "$2"
           set -- $(python3 -c 'import os; print(*sorted(os.sched_getaffinity(0)))')
           mkdir -p /run/bencher && echo "$@" > /run/bencher/cpus
           [ "$#" -ge 2 ] || { echo "bencher: telemetry fencing needs 2 CPUs, the instance has $#" >&2; exit 1; }
           systemctl set-property --runtime bencher.slice "AllowedCPUs=$1"
           shift
           systemctl set-property --runtime bench.slice "AllowedCPUs=$(echo "$@" | tr ' ' ',')"
-          if [ -f /var/lib/bencher/runner/salt/runner.sls ]; then
-            salt-call --local --retcode-passthrough --state-output=changes state.apply runner
-          fi
+          runner
           exec salt-call --local --retcode-passthrough --state-output=changes state.apply bencher ;;
+        prime)
+          stage "$2"
+          runner
+          exec rm -rf /var/lib/bencher ;;
         clean)
           cloud-init clean --logs
           # see https://www.freedesktop.org/software/systemd/man/latest/machine-id.html#First%20Boot%20Semantics
           exec truncate -s 0 /etc/machine-id ;;
-        *) echo "usage: bencher-agent wait|log|clean|flush|check|provision <seconds>|run <seconds>" >&2; exit 2 ;;
+        *) echo "usage: bencher-agent wait|log|clean|flush|check|provision <seconds>|prime <seconds>|run <seconds>" >&2; exit 2 ;;
       esac
   - path: /etc/systemd/system/victoria-metrics.service.d/bencher.conf
     content: |

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from deepmerge import Merger
 
@@ -22,6 +22,7 @@ class Bench(Model):
     telemetry: Telemetry = Telemetry()
     params: dict[str, Any] = {}
     artifacts: dict[Name, str] = {}
+    cache: Literal["base", "provisioned"] = "base"
 
     @classmethod
     def load(cls, root: Path, overrides: list[Override]) -> Bench:

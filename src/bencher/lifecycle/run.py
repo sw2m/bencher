@@ -19,6 +19,8 @@ from bencher.host.agent import Agent
 from bencher.host.cpus import Cpus
 from bencher.host.failure import Failure
 from bencher.host.image import Image
+from bencher.host.image.base import Base
+from bencher.host.image.provisioned import Provisioned
 from bencher.host.incus import Incus
 from bencher.host.log import Log
 from bencher.host.settings import Settings
@@ -40,6 +42,12 @@ class Run:
         self.share = Share(settings.cache / "runs" / self.name)
         self.errors: list[Error] = []
         self.cache: Cache | None = None
+        base = Base(plan.runner, settings.cache, settings.l1, self.log)
+        self.image: Image = (
+            Provisioned(plan.runner, settings.cache, base, self.share, self.log)
+            if plan.bench.cache == "provisioned"
+            else base
+        )
 
     @classmethod
     async def perform(
@@ -67,9 +75,7 @@ class Run:
         limit = plan.bench.limits.provision.total_seconds()
         loop = asyncio.get_running_loop()
         deadline = loop.time() + limit
-        image = Image(plan.runner, self.settings.cache, self.settings.l1, self.log)
-        self.cache = await image.ensure(incus, limit)
-        self.share.path.mkdir(parents=True, exist_ok=True)
+        self.cache = await self.image.ensure(incus, limit)
         count = plan.bench.limits.cpu
         cpus = Cpus(incus)
         await cpus.load()
@@ -81,24 +87,17 @@ class Run:
                 pinned = await cpus.reserve(count)
                 if pinned is not None:
                     self.log.say(
-                        f"launch {self.name}: {plan.runner.type} {image.alias}, CPUs {pinned}"
+                        f"launch {self.name}: {plan.runner.type} {self.image.alias}, CPUs {pinned}"
                     )
                     await incus.create(
                         self.name,
                         plan.runner.type,
-                        image.alias,
+                        self.image.alias,
                         config={
                             "limits.cpu": pinned,
                             "limits.memory": str(int(plan.bench.limits.memory)),
                         },
-                        devices={
-                            "run": {
-                                "type": "disk",
-                                "source": str(self.share.path),
-                                "path": "/bencher/run",
-                                "readonly": "true",
-                            },
-                        },
+                        devices={"run": self.share.device()},
                         timeout=max(120.0, deadline - loop.time()),
                     )
                     return
@@ -198,10 +197,10 @@ class Run:
         plan = self.plan
         stage: Stage = "launch"
         try:
-            await self.create(incus)
             stage = "stage"
             self.share.stage(plan.root, plan.bench, plan.runner, plan.tree)
             stage = "launch"
+            await self.create(incus)
             await incus.state(self.name, "start", 300)
             agent = Agent(incus, self.name, self.log)
             stage = "provision"

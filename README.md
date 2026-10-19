@@ -36,16 +36,15 @@ them through a param the runner reads, by the runner's own convention (e.g. `[pa
 ```
 bencher run <bench dir>
   1. load       bench.toml (+ --set), locate the fixture runner, load runner.toml and expect.tsv
-  2. launch     resolve the runner's formed image (see Images), create the instance from it stopped,
-                with the run share
-  3. stage      write the run share: bencher's Salt states, the runner, the consumer's inputs, pillar
-  4. launch     start
-  5. provision  `bencher-agent provision`: copy the share, fence the CPUs, apply the runner's and
+  2. stage      write the run share: bencher's Salt states, the runner, the consumer's inputs, pillar
+  3. launch     resolve the runner's image (see Images; a provisioned image is keyed on the share),
+                create the instance from it stopped, with the run share, and start it
+  4. provision  `bencher-agent provision`: copy the share, fence the CPUs, apply the runner's and
                 bencher's states
-  6. execute    exec the entrypoint, fenced from telemetry; its stdout is the result
-  7. harvest    stop the collector, then flush and export the store over HTTP from the host
-  8. teardown   delete the instance
-  9. report     add stats and telemetry, evaluate expect.tsv, write the report JSON
+  5. execute    exec the entrypoint, fenced from telemetry; its stdout is the result
+  6. harvest    stop the collector, then flush and export the store over HTTP from the host
+  7. teardown   delete the instance
+  8. report     add stats and telemetry, evaluate expect.tsv, write the report JSON
 ```
 
 The exit status is `0` when the report passes and `1` otherwise. A report is always written,
@@ -129,6 +128,7 @@ entrypoint's environment) and one command, `bencher-agent`, which the host drive
 | `bencher-agent log` | prints the cloud-init output, shown when it fails |
 | `bencher-agent clean` | resets cloud-init's state and empties the machine id before the image is published, so each instance gets its own id without systemd's first-boot presets re-enabling the telemetry services |
 | `bencher-agent provision <seconds>` | waits up to `<seconds>` (the rest of `limits.provision`) for the run share and copies it to local disk (`/var/lib/bencher`), so the measurement never touches a share; fences the CPUs (the first CPU of the instance's affinity to `bencher.slice`, the rest to `bench.slice`, set at runtime with `systemctl set-property` since a container's CPU ids are chosen by Incus per instance); then `salt-call --local state.apply runner` and `state.apply bencher` |
+| `bencher-agent prime <seconds>` | forms a provisioned image (see Images): copies the run share as `provision` does, applies only `state.apply runner` (no fence, no `bencher` state, so telemetry stays disabled), then removes `/var/lib/bencher`, so no run's inputs stay in the image |
 | `bencher-agent check` | exits 3 if the instance's CPUs are no longer the set `provision` fenced |
 | `bencher-agent run <seconds>` | runs the entrypoint in `bench.slice` with `/etc/bencher/env`, killed after `<seconds>`; its stdout is the result |
 | `bencher-agent flush` | stops the collector, which makes its final gather and flush |
@@ -155,6 +155,22 @@ tarball to re-form.
 | L1 | `<key>.tar` from the `l1` source (by default the GitHub release `v<version>`), checked against the source's `manifest.json` | a release formed the same image and type |
 | L0 | formed locally, then exported to `<cache>/images/<key>.tar` | nothing else hits |
 
+**L2 is the consumer's cache.** `cache` in `bench.toml` says what it holds:
+
+| `cache` | L2 holds | Key | A hit skips |
+| --- | --- | --- | --- |
+| `"base"` (default) | the base image above | the base key | the L1 download |
+| `"provisioned"` | the base after the runner's states: its packages and builds | the base key, the kind, and a digest of the staged run share without `in/artifacts` (bencher's states, the runner tree, the pillar, `params.json`) | provisioning's builds |
+
+A provisioned miss resolves the base as above (L2, L1 or L0), launches a forming instance from it
+with the run share mounted, runs `bencher-agent prime`, then `clean`, and publishes and exports
+it as the base is. The run then launches from the provisioned image and provisions as always:
+`state.apply runner` runs on every run, on top of the primed image, so it must be idempotent, and
+anything floating it resolves (a latest release) is re-resolved each run rather than frozen in
+the image. Artifacts aren't in the key, since they change with every consumer commit; a state
+that builds from an artifact rebuilds it each run. A provisioned image is per consumer and isn't
+part of a release.
+
 A release forms L1 images for the in-repo runners (`images:debian/12/cloud`, as a container and
 as a VM); a consumer runner on the same image and type downloads them instead of forming (see
 Release). L1 is whatever the release attached; a release without the key, or with no `manifest.json` at
@@ -176,7 +192,9 @@ lets a cache drop the ones a run didn't need.
 ## Salt
 
 Salt is the runner's IaC engine. The runner's states (`salt/runner.sls` in its directory)
-provision everything the runner needs; bencher's states render the Telegraf config, start the
+provision everything the runner needs, and must be idempotent: with `cache = "provisioned"` they
+re-apply on an image they already provisioned, so a build that is already present at the version
+it resolves should be skipped (see Images); bencher's states render the Telegraf config, start the
 store and the collector, and wait until system telemetry reaches the store. Consumer inputs
 reach the states as pillar under `bencher`:
 
@@ -257,6 +275,7 @@ linkup = "../../result/bin/linkup"
 - `limits.cpu` is at least 2: one CPU is fenced for telemetry. `limits.memory` is a byte size
   (`4GiB`, `4GB`, or bytes).
 - Durations are seconds, ISO 8601 (`PT30M`) or `HH:MM:SS`.
+- `cache` is what this consumer's L2 holds, `"base"` (default) or `"provisioned"` (see Images).
 - `limits.provision` bounds launching (resolving or forming the runner's image, then waiting for
   free CPUs) and then, separately, the run's own provisioning. `limits.run` bounds the entrypoint.
 
@@ -322,7 +341,7 @@ with the environment in `/etc/bencher/env`:
 {
   "pass": true,
   "overrides": {},
-  "cache": {"key": "f5949fe0ff596a01a84dfcd8", "level": "L2"},
+  "cache": {"key": "f5949fe0ff596a01a84dfcd8", "level": "L2", "kind": "base", "base": null},
   "rows": [
     {"name": "throughput", "tags": {"pair": "linkup.pppd"}, "reporter": "linkup",
      "samples": {"Mbit/s": [141.2, 139.8, 142.0]},
@@ -346,9 +365,11 @@ with the environment in `/etc/bencher/env`:
 
 - `overrides` is every `--set` applied to `bench.toml` for this run, as dotted key → value. A
   consumer CI can refuse a report whose `overrides` isn't empty.
-- `cache` is the runner image the run launched from (see Images): its `key`, and the `level` it
-  came from: `L2` (this machine's Incus image or cache tarball), `L1` (downloaded from the
-  release) or `L0` (formed by this run). It is `null` when the run failed before an image was
+- `cache` is the runner image the run launched from (see Images): its `key`, its `kind`
+  (`base` or `provisioned`), and the `level` it came from: `L2` (this machine's Incus image or
+  cache tarball), `L1` (downloaded from the release) or `L0` (formed, or for `provisioned`
+  primed, by this run). A provisioned image formed by this run also carries `base`, the base
+  image's own `cache` as resolved under it. It is `null` when the run failed before an image was
   resolved.
 - `stats.ci` is the distribution-free 95% confidence interval of the median
   (`scipy.stats.quantile_test`) as `[low, high]`, `null` when there are too few samples (under
@@ -529,7 +550,10 @@ installer release) only where it is missing.
 
 CI's `action` job runs the same consumer through the repository's own `action.yml` twice. The
 first run forms the image (L0); then the job deletes the Incus image, so the second run must
-import the tarball the first one cached and report `L2`.
+import the tarball the first one cached and report `L2`. It then does the same with
+`--set cache=provisioned`: the first primes a provisioned image on the cached base (`provisioned`,
+`L0`, with a base at `L2`), and after its Incus image is deleted the second must import its
+tarball and report `provisioned` at `L2`.
 
 `mergeable` is the one required status check on `main`; it needs `check`, `run` and `action`.
 Open PRs as drafts; CI runs when a PR is marked ready, or on demand with `workflow_dispatch`; a

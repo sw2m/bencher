@@ -8,3 +8,5 @@ from bencher.contract.model import Model
 class Cache(Model):
     key: str
     level: Literal["L0", "L1", "L2"]
+    kind: Literal["base", "provisioned"] = "base"
+    base: Cache | None = None

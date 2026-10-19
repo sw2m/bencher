@@ -78,6 +78,23 @@ jobs:
         with:
           bench: ci/bench
       - run: '[ "${{ steps.cached.outputs.passed }}" = true ] && [ "${{ steps.cached.outputs.cache }}" = L2 ]'
+      - id: primed
+        uses: ./
+        with:
+          bench: ci/bench
+          args: --set cache=provisioned
+      - run: |
+          [ "${{ steps.primed.outputs.passed }}" = true ]
+          [ "$(jq -r '.cache.kind + " " + .cache.level + " " + .cache.base.level' '${{ steps.primed.outputs.report }}')" = "provisioned L0 L2" ]
+      - run: sg incus-admin -c "incus image delete bencher/$(jq -r .cache.key '${{ steps.primed.outputs.report }}')"
+      - id: provisioned
+        uses: ./
+        with:
+          bench: ci/bench
+          args: --set cache=provisioned
+      - run: |
+          [ "${{ steps.provisioned.outputs.passed }}" = true ]
+          [ "$(jq -r '.cache.kind + " " + .cache.level' '${{ steps.provisioned.outputs.report }}')" = "provisioned L2" ]
 
   # The one status to mark required
   mergeable:

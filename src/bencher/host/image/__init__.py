@@ -3,35 +3,28 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import hashlib
-import json
 import time
-import uuid
-from functools import cached_property
-from importlib import metadata, resources
 from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Literal
 
-import httpx
-
 from bencher.contract.input.runner import Runner
 from bencher.contract.output.cache import Cache
-from bencher.host.agent import Agent
 from bencher.host.failure import Failure
 from bencher.host.incus import Incus
 from bencher.host.log import Log
 from bencher.host.store import Store
-from bencher.host.target import Target
 
 
 class Image:
-    def __init__(self, runner: Runner, cache: Path, source: str, log: Log) -> None:
+    kind: Literal["base", "provisioned"] = "base"
+
+    def __init__(self, runner: Runner, cache: Path, log: Log) -> None:
         self.runner = runner
         self.images = cache / "images"
-        self.source = source
         self.log = log
-        self.version = metadata.version("bencher")
         self.deadline = 0.0
+        self.base: Cache | None = None
 
     @staticmethod
     def digest(node: Traversable, prefix: str = "") -> list[tuple[str, str]]:
@@ -46,11 +39,9 @@ class Image:
                 found.append((path, hashlib.sha256(entry.read_bytes()).hexdigest()))
         return found
 
-    @cached_property
+    @property
     def key(self) -> str:
-        source = self.digest(resources.files("bencher"))
-        seed = [self.version, source, self.runner.image, self.runner.type]
-        return hashlib.sha256(json.dumps(seed).encode()).hexdigest()[:24]
+        raise NotImplementedError
 
     @property
     def alias(self) -> str:
@@ -89,6 +80,9 @@ class Image:
     def left(self) -> float:
         return max(1.0, self.deadline - time.monotonic())
 
+    def cache(self, level: Literal["L0", "L1", "L2"]) -> Cache:
+        return Cache(key=self.key, level=level, kind=self.kind, base=self.base)
+
     async def ensure(self, incus: Incus, timeout: float) -> Cache:
         self.deadline = time.monotonic() + timeout
         self.images.mkdir(parents=True, exist_ok=True)
@@ -96,31 +90,35 @@ class Image:
             await asyncio.to_thread(fcntl.flock, lock, fcntl.LOCK_EX)
             return await self.resolve(incus, Store(incus))
 
+    async def fetch(self) -> bool:
+        return False
+
+    async def form(self, incus: Incus, store: Store) -> None:
+        raise NotImplementedError
+
     async def resolve(self, incus: Incus, store: Store) -> Cache:
         if await store.fingerprint(self.alias) is not None:
             self.log.say(f"image {self.alias}: cached")
             if self.tarball.exists():
                 self.tarball.touch()
-            return Cache(key=self.key, level="L2")
+            return self.cache("L2")
         if self.tarball.exists() and not await self.verify():
             self.log.say(f"image {self.alias}: discarding {self.tarball}: fails its checksum")
             self.discard()
         level: Literal["L1", "L2"] = "L2"
         if not self.tarball.exists() and await self.fetch():
-            self.log.say(f"image {self.alias}: downloaded {self.url(f'{self.key}.tar')}")
             level = "L1"
         if self.tarball.exists():
             self.log.say(f"image {self.alias}: importing {self.tarball}")
             self.tarball.touch()
             try:
                 await store.load(self.tarball, self.alias, self.left())
-                return Cache(key=self.key, level=level)
+                return self.cache(level)
             except Failure as error:
                 if await self.adopt(store):
-                    return Cache(key=self.key, level=level)
+                    return self.cache(level)
                 self.log.say(f"image {self.alias}: discarding {self.tarball}: {error}")
                 self.discard()
-        self.log.say(f"image {self.alias}: forming from {self.runner.image}")
         await self.form(incus, store)
         try:
             await store.export(self.alias, self.partial)
@@ -130,7 +128,7 @@ class Image:
         except (Failure, OSError) as error:
             self.log.say(f"image {self.alias}: not cached as a tarball: {error}")
             self.partial.unlink(missing_ok=True)
-        return Cache(key=self.key, level="L0")
+        return self.cache("L0")
 
     async def adopt(self, store: Store) -> bool:
         if await store.fingerprint(self.alias) is None:
@@ -138,61 +136,16 @@ class Image:
         self.log.say(f"image {self.alias}: made concurrently by another run; using it")
         return True
 
-    def url(self, file: str) -> str:
-        return self.source.format(version=self.version, file=file)
-
-    async def fetch(self) -> bool:
+    async def publish(self, incus: Incus, store: Store, name: str) -> None:
+        await incus.state(name, "stop", min(300, self.left()))
         try:
-            url = self.url("manifest.json")
-            async with httpx.AsyncClient(follow_redirects=True, timeout=600) as client:
-                response = await client.get(url)
-                if response.status_code == 404:
-                    self.log.say(f"no L1 image at {url}, forming locally")
-                    return False
-                response.raise_for_status()
-                manifest = response.json()
-                expected = manifest.get(f"{self.key}.tar") if isinstance(manifest, dict) else None
-                if expected is None:
-                    return False
-                sha = hashlib.sha256()
-                url = self.url(f"{self.key}.tar")
-                async with client.stream("GET", url) as stream:
-                    stream.raise_for_status()
-                    with self.partial.open("wb") as file:
-                        async for chunk in stream.aiter_bytes():
-                            sha.update(chunk)
-                            file.write(chunk)
-        except (httpx.HTTPError, ValueError, OSError) as error:
-            self.log.say(f"L1 image unavailable, forming locally: {error}")
-            self.partial.unlink(missing_ok=True)
-            return False
-        if sha.hexdigest() != expected:
-            self.log.say(f"L1 image {self.key}.tar fails its digest, forming locally")
-            self.partial.unlink(missing_ok=True)
-            return False
-        self.partial.rename(self.tarball)
-        self.checksum.write_text(f"{expected}\n")
-        return True
+            await store.publish(name, self.alias, self.left())
+        except Failure:
+            if not await self.adopt(store):
+                raise
 
-    async def form(self, incus: Incus, store: Store) -> None:
-        name = f"bencher-form-{uuid.uuid4().hex[:12]}"
+    async def drop(self, incus: Incus, name: str) -> None:
         try:
-            await incus.create(name, self.runner.type, self.runner.image, {}, {}, self.left())
-            target = Target.of(self.runner.type, await incus.config(name))
-            self.log.say(f"cloud-init for {target.distro} {target.release}")
-            await incus.configure(name, {"cloud-init.user-data": target.compose()})
-            await incus.state(name, "start", min(300, self.left()))
-            agent = Agent(incus, name, self.log)
-            await agent.wait(self.left())
-            await agent.step("clean")
-            await incus.state(name, "stop", min(300, self.left()))
-            try:
-                await store.publish(name, self.alias, self.left())
-            except Failure:
-                if not await self.adopt(store):
-                    raise
-        finally:
-            try:
-                await incus.delete(name)
-            except Failure as error:
-                self.log.say(f"could not delete {name}: {error}")
+            await incus.delete(name)
+        except Failure as error:
+            self.log.say(f"could not delete {name}: {error}")
