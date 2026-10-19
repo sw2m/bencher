@@ -374,15 +374,18 @@ run. One rule per line, tab-separated, `#` comments; `tags` and `bound` are JSON
 bulk	{"impl": "core"}	samples.MB/s.median	>=	{"times": 0.9, "of": {"impl": "yamux"}}
 bulk	{"impl": "core"}	telemetry.procstat_memory_rss.max	<=	67108864
 parse	{"impl": "socat", "input": "TCP4:h:1"}	verdict	==	"err"
+parse	{}	rules	>=	1
 ```
 
 - **tags** is matched as a subset of each row's tags; `{}` matches every row of that name.
   Every rule must match at least one row, so stale rules fail.
-- **quantity** is `verdict`, `samples.<unit>.<stat>` or `telemetry.<metric>.<stat>`, where
-  `<stat>` is a scalar field of the corresponding `stats` or `summary`.
+- **quantity** is `verdict`, `rules`, `samples.<unit>.<stat>` or `telemetry.<metric>.<stat>`,
+  where `<stat>` is a scalar field of the corresponding `stats` or `summary`. `rules` is how many
+  other rules match the row, not counting `rules` rules, so `parse {} rules >= 1` fails on any
+  `parse` row nothing decides, such as a new input in a verdict matrix (#23).
 - **op** is one of `<`, `<=`, `==`, `!=`, `>=`, `>`; verdicts take `==` or `!=`. `==` on a
   measured float is legal but rarely what you want.
-- **bound** is a number (not a boolean), `"ok"`/`"err"` for verdicts, or
+- **bound** is a number (not a boolean; `rules` takes only a number), `"ok"`/`"err"` for verdicts, or
   `{"times": <factor>, "of": <tags>}`: the same quantity on the row with the same name whose tags
   are the matched row's tags updated with `of`. `of` must change the tags. A missing reference row
   or quantity fails the check with `bound: null`, and the outcome's `error` names what was
@@ -397,7 +400,7 @@ refuses a report with `errors`), printing every change:
 - a broader `verdict ==` rule is kept verbatim; rows it already asserts get no exact rule, and rows
   that now contradict it are reported;
 - every other verdict row gets a new exact rule, appended;
-- every other line (comments, measure rules) is kept verbatim. Measure bounds are only ever set by
+- every other line (comments, measure and `rules` rules) is kept verbatim. Measure bounds are only ever set by
   hand.
 
 ## Operating systems

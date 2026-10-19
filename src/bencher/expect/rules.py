@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from bencher.contract.output.line import Line
 from bencher.contract.output.outcome import Outcome
 from bencher.contract.reason import Reason
 from bencher.expect.rule import Rule
+from bencher.expect.table import Table
 from bencher.expect.tsv import Tsv
 
 columns = ["name", "tags", "quantity", "op", "bound"]
@@ -52,7 +54,14 @@ class Rules:
         return cls.parse(path.read_text()) if path.exists() else None
 
     def check(self, rows: list[Line]) -> list[Outcome]:
-        return [rule.check(rows) for rule in self.rules.values()]
+        table = Table(rows)
+        counts = Counter(
+            row.key()
+            for rule in self.rules.values()
+            if rule.quantity.kind != "rules"
+            for row in table.select(rule.name, rule.tags)
+        )
+        return [rule.check(table, counts) for rule in self.rules.values()]
 
     def bless(self, rows: list[Line]) -> tuple[str, list[str]]:
         verdicts = {(line.name, self.canon(line.tags)): line for line in rows if line.verdict}
