@@ -381,8 +381,11 @@ parse	{}	rules	>=	1
   Every rule must match at least one row, so stale rules fail.
 - **quantity** is `verdict`, `rules`, `samples.<unit>.<stat>` or `telemetry.<metric>.<stat>`,
   where `<stat>` is a scalar field of the corresponding `stats` or `summary`. `rules` is how many
-  other rules match the row, not counting `rules` rules, so `parse {} rules >= 1` fails on any
-  `parse` row nothing decides, such as a new input in a verdict matrix (#23).
+  exact rules the row has: other rules whose tags are the row's full tags, not counting `rules`
+  rules. So `parse {} rules >= 1` fails on any `parse` row nothing decides individually, such as
+  a new input in a verdict matrix (#23). A broad rule (`parse {"impl": "socat"}`) still checks
+  every row it matches but never counts as deciding one, or adding it would let new rows through
+  undecided.
 - **op** is one of `<`, `<=`, `==`, `!=`, `>=`, `>`; verdicts take `==` or `!=`. `==` on a
   measured float is legal but rarely what you want.
 - **bound** is a number (not a boolean; the only kind `rules` takes), `"ok"`/`"err"` for verdicts,
