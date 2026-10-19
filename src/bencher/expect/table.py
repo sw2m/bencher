@@ -18,6 +18,9 @@ class Table:
             for k, v in row.tags.items():
                 self.postings[(row.name, k, v)].append(i)
 
+    def get(self, name: str, tags: dict[str, str]) -> Line | None:
+        return self.keyed.get((name, tuple(sorted(tags.items()))))
+
     def select(self, name: str, tags: dict[str, str]) -> list[Line]:
         lists = [self.postings.get((name, k, v), []) for k, v in tags.items()]
         candidates = min(lists, key=len) if lists else self.named.get(name, [])

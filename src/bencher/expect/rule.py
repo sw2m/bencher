@@ -59,7 +59,7 @@ class Rule(Model):
         tags = {**row.tags, **self.bound.of}
         if tags == row.tags:
             return None, f"{row.name} {dict(row.tags)} is its own reference"
-        reference = table.keyed.get((row.name, tuple(sorted(tags.items()))))
+        reference = table.get(row.name, tags)
         if reference is None:
             return None, f"no reference row {row.name} {tags}"
         base = self.quantity.read(reference, counts)

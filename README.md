@@ -385,7 +385,8 @@ parse	{}	rules	>=	1
   `parse` row nothing decides, such as a new input in a verdict matrix (#23).
 - **op** is one of `<`, `<=`, `==`, `!=`, `>=`, `>`; verdicts take `==` or `!=`. `==` on a
   measured float is legal but rarely what you want.
-- **bound** is a number (not a boolean; `rules` takes only a number), `"ok"`/`"err"` for verdicts, or
+- **bound** is a number (not a boolean; the only kind `rules` takes), `"ok"`/`"err"` for verdicts,
+  or
   `{"times": <factor>, "of": <tags>}`: the same quantity on the row with the same name whose tags
   are the matched row's tags updated with `of`. `of` must change the tags. A missing reference row
   or quantity fails the check with `bound: null`, and the outcome's `error` names what was
@@ -399,9 +400,10 @@ refuses a report with `errors`), printing every change:
 - an exact rule whose row is gone, and that matches no row at all, is dropped;
 - a broader `verdict ==` rule is kept verbatim; rows it already asserts get no exact rule, and rows
   that now contradict it are reported;
-- every other verdict row gets a new exact rule, appended;
-- every other line (comments, measure and `rules` rules) is kept verbatim. Measure bounds are only ever set by
-  hand.
+- every other verdict row gets a new exact rule, appended, so a blessed file satisfies its own
+  `rules` rules over verdict rows; over measure rows, decided only by hand-set bounds, it can't;
+- every other line (comments, measure and `rules` rules) is kept verbatim. Measure bounds are
+  only ever set by hand.
 
 ## Operating systems
 

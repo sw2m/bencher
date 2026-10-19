@@ -55,10 +55,11 @@ class Rules:
 
     def check(self, rows: list[Line]) -> list[Outcome]:
         table = Table(rows)
+        counted = any(rule.quantity.kind == "rules" for rule in self.rules.values())
         counts = Counter(
             row.key()
             for rule in self.rules.values()
-            if rule.quantity.kind != "rules"
+            if counted and rule.quantity.kind != "rules"
             for row in table.select(rule.name, rule.tags)
         )
         return [rule.check(table, counts) for rule in self.rules.values()]
