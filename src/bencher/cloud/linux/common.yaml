@@ -30,7 +30,9 @@ write_files:
       }
       runner() {
         if [ -f /var/lib/bencher/runner/salt/runner.sls ]; then
-          salt-call --local --retcode-passthrough --state-output=changes state.apply runner
+          # see https://docs.saltproject.io/en/latest/ref/modules/all/salt.modules.state.html#salt.modules.state.apply_
+          salt-call --local --retcode-passthrough --state-output=changes state.apply runner \
+            pillar="{\"bencher\": {\"phase\": \"$1\"}}"
         fi
       }
       case "${1:-}" in
@@ -62,17 +64,24 @@ write_files:
           systemctl set-property --runtime bencher.slice "AllowedCPUs=$1"
           shift
           systemctl set-property --runtime bench.slice "AllowedCPUs=$(echo "$@" | tr ' ' ',')"
-          runner
+          runner run
           exec salt-call --local --retcode-passthrough --state-output=changes state.apply bencher ;;
+        resolve)
+          stage "$2"
+          cd /var/lib/bencher/runner
+          [ -x resolve ] || { echo '{}'; exit 0; }
+          set -a; . /etc/bencher/env; set +a
+          exec ./resolve ;;
         prime)
           stage "$2"
-          runner
+          rm -rf /var/lib/bencher/in/artifacts
+          runner prime
           exec rm -rf /var/lib/bencher ;;
         clean)
           cloud-init clean --logs
           # see https://www.freedesktop.org/software/systemd/man/latest/machine-id.html#First%20Boot%20Semantics
           exec truncate -s 0 /etc/machine-id ;;
-        *) echo "usage: bencher-agent wait|log|clean|flush|check|provision <seconds>|prime <seconds>|run <seconds>" >&2; exit 2 ;;
+        *) echo "usage: bencher-agent wait|log|clean|flush|check|provision <seconds>|resolve <seconds>|prime <seconds>|run <seconds>" >&2; exit 2 ;;
       esac
   - path: /etc/systemd/system/victoria-metrics.service.d/bencher.conf
     content: |

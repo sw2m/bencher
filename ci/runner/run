@@ -2,6 +2,7 @@
 set -eu
 seconds=$(jq -r .duration "$BENCHER_IN/params.json")
 test -s "$BENCHER_IN/artifacts/probe"
+test "$(jq -r .probe /opt/ci/resolved.json)" = 1
 sh -c 'echo $$ > "$BENCHER_REPORTERS/spin.pid"
   (timeout "$1" sh -c "while :; do :; done") &
   timeout "$1" sh -c "while :; do :; done"

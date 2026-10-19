@@ -6,14 +6,17 @@ import uuid
 from functools import cached_property
 from importlib import metadata, resources
 from pathlib import Path
+from typing import Any
 
 import httpx
 
 from bencher.contract.input.runner import Runner
 from bencher.host.agent import Agent
+from bencher.host.failure import Failure
 from bencher.host.image import Image
 from bencher.host.incus import Incus
 from bencher.host.log import Log
+from bencher.host.share import Share
 from bencher.host.store import Store
 from bencher.host.target import Target
 
@@ -66,6 +69,26 @@ class Base(Image):
         self.checksum.write_text(f"{expected}\n")
         self.log.say(f"image {self.alias}: downloaded {self.url(f'{self.key}.tar')}")
         return True
+
+    async def query(self, incus: Incus, share: Share) -> dict[str, Any]:
+        name = f"bencher-resolve-{uuid.uuid4().hex[:12]}"
+        try:
+            agent = await self.launch(incus, name, share)
+            left = self.left()
+            done = await agent.call("resolve", str(int(left)), timeout=left)
+        finally:
+            await self.drop(incus, name)
+        self.log.write(done.stderr)
+        if done.code != 0:
+            raise Failure(f"the runner's resolve exited {done.code}")
+        try:
+            resolved = json.loads(done.stdout)
+        except ValueError as error:
+            raise Failure(f"the runner's resolve printed no JSON object: {error}") from None
+        if not isinstance(resolved, dict):
+            raise Failure("the runner's resolve printed JSON that is not an object")
+        self.log.say(f"resolved {json.dumps(resolved, sort_keys=True)}")
+        return resolved
 
     async def form(self, incus: Incus, store: Store) -> None:
         self.log.say(f"image {self.alias}: forming from {self.runner.image}")

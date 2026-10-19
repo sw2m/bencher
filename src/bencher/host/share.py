@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 from importlib import resources
 from pathlib import Path
@@ -25,6 +26,7 @@ class Share:
         artifacts = self.artifacts(root, bench)
         self.params(bench)
         self.pillar(bench, runner, artifacts)
+        self.write()
         self.publish()
 
     def states(self) -> None:
@@ -61,18 +63,33 @@ class Share:
     def pillar(self, bench: Bench, runner: Runner, artifacts: dict[str, str]) -> None:
         seconds = bench.telemetry.interval.total_seconds()
         ready = max(60, int(3 * seconds) + 1)  # the first gather lands within 2 intervals
-        data: dict[str, Any] = {
+        self.data: dict[str, Any] = {
             "bencher": {
                 "params": bench.params,
                 "artifacts": artifacts,
                 "reporters": runner.reporters,
                 "telemetry": {"interval": f"{int(seconds * 1000)}ms", "ready": ready},
+                "phase": "run",
+                "resolved": {},
             }
         }
+
+    def write(self) -> None:
         pillar = self.inputs / "pillar"
-        pillar.mkdir()
+        pillar.mkdir(exist_ok=True)
         (pillar / "top.sls").write_text(yaml.safe_dump({"base": {"*": ["bencher"]}}))
-        (pillar / "bencher.sls").write_text(yaml.safe_dump(data))
+        (pillar / "bencher.sls").write_text(yaml.safe_dump(self.data))
+        resolved = self.data["bencher"]["resolved"]
+        (self.inputs / "resolved.json").write_bytes(pydantic_core.to_json(resolved) + b"\n")
+
+    @property
+    def resolver(self) -> bool:
+        return os.access(self.path / "runner" / "resolve", os.X_OK)
+
+    def resolve(self, resolved: dict[str, Any]) -> None:
+        self.data["bencher"]["resolved"] = resolved
+        self.write()
+        self.publish()
 
     def publish(self) -> None:
         for path in [self.path, *self.path.rglob("*")]:

@@ -37,8 +37,9 @@ them through a param the runner reads, by the runner's own convention (e.g. `[pa
 bencher run <bench dir>
   1. load       bench.toml (+ --set), locate the fixture runner, load runner.toml and expect.tsv
   2. stage      write the run share: bencher's Salt states, the runner, the consumer's inputs, pillar
-  3. launch     resolve the runner's image (see Images; a provisioned image is keyed on the share),
-                create the instance from it stopped, with the run share, and start it
+  3. launch     run the runner's `resolve`, if it has one, into the share; resolve the runner's image
+                (see Images; a provisioned image is keyed on the share), create the instance from it
+                stopped, with the run share, and start it
   4. provision  `bencher-agent provision`: copy the share, fence the CPUs, apply the runner's and
                 bencher's states
   5. execute    exec the entrypoint, fenced from telemetry; its stdout is the result
@@ -64,14 +65,18 @@ instance starts or stops, which would move the CPUs out from under the telemetry
 explicit set is never rebalanced. bencher picks `limits.cpu` CPUs that no instance in any
 project has pinned (by CPU id, or by NUMA node through `limits.cpu.nodes`), under a lock at
 `/tmp/bencher.cpus.lock` held until the instance exists, so concurrent bencher runs on a host
-never pick the same CPUs. The lock is created once, mode `0666`, and opened without `O_CREAT`
-afterwards, since `fs.protected_regular` refuses a create-open of another user's file in `/tmp`. It takes **one thread from each of `limits.cpu` untouched physical
+never pick the same CPUs. It takes **one thread from each of `limits.cpu` untouched physical
 cores**, so telemetry and the benchmark never share a core's execution units, and a core one
 bencher run has touched is left to it; only when there are too few untouched cores does it take
 spare threads of partly used ones. When too few CPUs are free it waits, inside the same
 `limits.provision` budget that resolving the image used, then fails at `launch`; a request
 larger than the host's online CPUs fails at once. A clustered Incus is refused: the pick is
-from the local host's topology.
+from the local host's topology. The lock is created once, mode `0666`, and opened without
+`O_CREAT` afterwards, since `fs.protected_regular` refuses a create-open of another user's file
+in `/tmp`; anything else at its path (a symlink, a directory, a file not every user can open)
+fails the run and names the path. Instances that form or prime an image, or run a runner's
+`resolve`, are short-lived and take no fenced CPUs, so a run is not isolated from one that is
+priming on the same host.
 
 The guest records the CPU set it fenced, and `bencher-agent check` (run before the entrypoint
 and again after the collector stops) fails the run if that set changed. That catches the fence
@@ -115,7 +120,7 @@ signed repositories, and Python 3 from the distro, at pinned versions, write the
 (`bencher.slice` for telemetry, `bench.slice` for the benchmark), write the systemd drop-ins that
 put both telemetry services in `bencher.slice`, and disable the telemetry services, so the
 formed image boots without recording. Nothing in the layers depends on a run: everything per run
-is `bencher-agent provision`.
+is `bencher-agent provision`, and everything per provisioned image is `resolve` and `prime`.
 
 ### The guest agent
 
@@ -161,16 +166,23 @@ tarball to re-form.
 | `cache` | L2 holds | Key | A hit skips |
 | --- | --- | --- | --- |
 | `"base"` (default) | the base image above | the base key | the L1 download |
-| `"provisioned"` | the base after the runner's states: its packages and builds | the base key, the kind, and a digest of the staged run share without `in/artifacts` (bencher's states, the runner tree, the pillar, `params.json`) | provisioning's builds |
+| `"provisioned"` | the base after the runner's states: its packages and builds | the base key, the kind, and a digest of the staged run share without `in/artifacts` (bencher's states, the runner tree, the pillar with `bencher:resolved`, `params.json`) | provisioning's builds |
 
-A provisioned miss resolves the base as above (L2, L1 or L0), launches a forming instance from it
-with the run share mounted, runs `bencher-agent prime`, then `clean`, and publishes and exports
-it as the base is. The run then launches from the provisioned image and provisions as always:
-`state.apply runner` runs on every run, on top of the primed image, so it must be idempotent, and
-anything floating it resolves (a latest release) is re-resolved each run rather than frozen in
-the image. Artifacts aren't in the key, since they change with every consumer commit; a state
-that builds from an artifact rebuilds it each run. A provisioned image is per consumer and isn't
-part of a release.
+**Floating inputs are resolved before the lookup.** A runner that tracks something floating (a
+latest release) ships an executable `resolve`. Whatever `cache` says, bencher then resolves the
+base first, runs `bencher-agent resolve` in a short-lived instance from it, and puts the JSON
+object it prints into the pillar as `bencher:resolved` (and `in/resolved.json`), so the state
+builds exactly what was resolved and a provisioned key carries it: a new upstream release misses.
+A runner without `resolve` has nothing floating to key, or keeps it out of the image.
+
+A provisioned miss then launches a forming instance from the base with the run share mounted, runs
+`bencher-agent prime`, then `clean`, and publishes and exports it as the base is. `prime` applies
+the runner's states with `bencher:phase` set to `prime` and without `in/artifacts`: artifacts
+aren't in the key, since they change with every consumer commit, so a state that consumes one
+fails at prime unless it is guarded on the phase. The run then launches from the provisioned
+image and provisions as always, with `bencher:phase` `run`: the runner's states re-apply on the
+primed image, so they must be idempotent. A provisioned image is per consumer and isn't part of
+a release.
 
 A release forms L1 images for the in-repo runners (`images:debian/12/cloud`, as a container and
 as a VM); a consumer runner on the same image and type downloads them instead of forming (see
@@ -205,6 +217,8 @@ reach the states as pillar under `bencher`:
 | `bencher:artifacts` | artifact name → its path in the guest, resolved from the `bencher:inputs` grain the layers set |
 | `bencher:reporters` | `reporters` in `runner.toml` |
 | `bencher:telemetry:interval` | `[telemetry] interval` in `bench.toml` |
+| `bencher:phase` | `prime` while forming a provisioned image, `run` in a run (see Images) |
+| `bencher:resolved` | what the runner's `resolve` printed; `{}` for a runner without one |
 
 ## Telemetry
 
@@ -278,7 +292,9 @@ linkup = "../../result/bin/linkup"
 - Durations are seconds, ISO 8601 (`PT30M`) or `HH:MM:SS`.
 - `cache` is what this consumer's L2 holds, `"base"` (default) or `"provisioned"` (see Images).
 - `limits.provision` bounds launching (resolving or forming the runner's image, then waiting for
-  free CPUs) and then, separately, the run's own provisioning. `limits.run` bounds the entrypoint.
+  free CPUs, and running the runner's `resolve`) and then, separately, the run's own provisioning. For `cache = "provisioned"`, the
+  launch budget also covers priming on a miss, so a first run needs room for both
+  the runner's builds and the CPU wait. `limits.run` bounds the entrypoint.
 
 ### `runner.toml` (fixture)
 
@@ -288,8 +304,10 @@ type = "container" # or vm
 reporters = ["linkup", "pppd"]
 ```
 
-A runner directory holds `runner.toml`, `salt/runner.sls` (and anything it references) and the
-entrypoint, `run` on Linux. `image` is `<remote>:<alias>` for the `images` and `ubuntu`
+A runner directory holds `runner.toml`, `salt/runner.sls` (and anything it references), the
+entrypoint, `run` on Linux, and optionally `resolve`: an executable that prints one JSON object
+naming what its floating inputs resolve to now (see Images). It runs as root in the guest, in the
+runner directory, with `/etc/bencher/env`, and must not depend on artifacts. `image` is `<remote>:<alias>` for the `images` and `ubuntu`
 remotes, or a local alias. Images must carry cloud-init and, for VMs, incus-agent; the
 `images:` remote's `cloud` variants do.
 
@@ -466,12 +484,14 @@ nix run github:sw2m/bencher/<ref> -- schema report
 
 The action needs an apt-based runner (`ubuntu-latest`). It installs Incus and nix, restores
 `~/.cache/bencher/images` from the Actions cache, and runs `bencher run`. It then keeps only the
-image the report says this run used (`cache.key`, its tarball and checksum), and saves the cache
-under a fresh key when that changed what was restored. Restores match any earlier save from the
-repository (`bencher-images-<os>-`): keys are content-addressed, so benches share images, and the
-cache is bounded by GitHub's eviction. Its outputs are `report` (the report JSON's path),
-`passed`, and `cache`, the report's cache level (`L0`, `L1` or `L2`); the step fails when the
-report does. `args` is split on whitespace and passed as arguments, never evaluated by a shell,
+images the report says this run used (`cache.key`, and for a provisioned image the base it
+resolved, `cache.base.key`: their tarballs and checksums), and saves the cache under a fresh key
+when that changed what was restored. Saves are scoped to the bench (`bencher-images-<os>-<bench>-`,
+`<bench>` a digest of the `bench` input), so benches in one repository don't evict each other's
+provisioned images; a restore takes that bench's latest save, else any bench's
+(`bencher-images-<os>-`), whose base keys are shared. Its outputs are `report` (the report JSON's
+path), `passed`, `cache`, the report's cache level (`L0`, `L1` or `L2`), and `kind` (`base` or
+`provisioned`); the step fails when the report does. `args` is split on whitespace and passed as arguments, never evaluated by a shell,
 so it can't carry a value with spaces. `cache: "false"` skips the Actions cache, so on a runner
 without the Incus image already present the run resolves L1 or L0. bencher itself is pinned by the action's ref.
 

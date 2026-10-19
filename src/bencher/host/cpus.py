@@ -25,12 +25,20 @@ class Cpus:
 
     @classmethod
     def open(cls) -> int:
+        flags = os.O_RDWR | os.O_NOFOLLOW
         while True:
             # see https://docs.kernel.org/admin-guide/sysctl/fs.html#protected-regular
-            with contextlib.suppress(FileNotFoundError):
-                return os.open(cls.path, os.O_RDWR)
+            try:
+                return os.open(cls.path, flags)
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                raise Failure(
+                    f"CPU lock {cls.path}: {error.strerror}; it must be a regular file "
+                    "that every bencher user can open read-write (mode 0666)"
+                ) from None
             with contextlib.suppress(FileExistsError):
-                fd = os.open(cls.path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o666)
+                fd = os.open(cls.path, flags | os.O_CREAT | os.O_EXCL, 0o666)
                 os.fchmod(fd, 0o666)
                 return fd
 

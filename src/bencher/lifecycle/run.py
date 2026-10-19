@@ -42,11 +42,11 @@ class Run:
         self.share = Share(settings.cache / "runs" / self.name)
         self.errors: list[Error] = []
         self.cache: Cache | None = None
-        base = Base(plan.runner, settings.cache, settings.l1, self.log)
+        self.base = Base(plan.runner, settings.cache, settings.l1, self.log)
         self.image: Image = (
-            Provisioned(plan.runner, settings.cache, base, self.share, self.log)
+            Provisioned(plan.runner, settings.cache, self.base, self.share, self.log)
             if plan.bench.cache == "provisioned"
-            else base
+            else self.base
         )
 
     @classmethod
@@ -75,7 +75,10 @@ class Run:
         limit = plan.bench.limits.provision.total_seconds()
         loop = asyncio.get_running_loop()
         deadline = loop.time() + limit
-        self.cache = await self.image.ensure(incus, limit)
+        if self.share.resolver:
+            await self.base.ensure(incus, max(1.0, deadline - loop.time()))
+            self.share.resolve(await self.base.query(incus, self.share))
+        self.cache = await self.image.ensure(incus, max(1.0, deadline - loop.time()))
         count = plan.bench.limits.cpu
         cpus = Cpus(incus)
         await cpus.load()

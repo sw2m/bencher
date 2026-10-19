@@ -10,9 +10,11 @@ from typing import Literal
 
 from bencher.contract.input.runner import Runner
 from bencher.contract.output.cache import Cache
+from bencher.host.agent import Agent
 from bencher.host.failure import Failure
 from bencher.host.incus import Incus
 from bencher.host.log import Log
+from bencher.host.share import Share
 from bencher.host.store import Store
 
 
@@ -24,7 +26,7 @@ class Image:
         self.images = cache / "images"
         self.log = log
         self.deadline = 0.0
-        self.base: Cache | None = None
+        self.resolved: Cache | None = None
 
     @staticmethod
     def digest(node: Traversable, prefix: str = "") -> list[tuple[str, str]]:
@@ -81,14 +83,15 @@ class Image:
         return max(1.0, self.deadline - time.monotonic())
 
     def cache(self, level: Literal["L0", "L1", "L2"]) -> Cache:
-        return Cache(key=self.key, level=level, kind=self.kind, base=self.base)
+        return Cache(key=self.key, level=level, kind=self.kind)
 
     async def ensure(self, incus: Incus, timeout: float) -> Cache:
         self.deadline = time.monotonic() + timeout
         self.images.mkdir(parents=True, exist_ok=True)
         with (self.images / f"{self.key}.lock").open("w") as lock:
             await asyncio.to_thread(fcntl.flock, lock, fcntl.LOCK_EX)
-            return await self.resolve(incus, Store(incus))
+            self.resolved = await self.resolve(incus, Store(incus))
+            return self.resolved
 
     async def fetch(self) -> bool:
         return False
@@ -143,6 +146,15 @@ class Image:
         except Failure:
             if not await self.adopt(store):
                 raise
+
+    async def launch(self, incus: Incus, name: str, share: Share) -> Agent:
+        await incus.create(
+            name, self.runner.type, self.alias, {}, {"run": share.device()}, self.left()
+        )
+        await incus.state(name, "start", min(300, self.left()))
+        agent = Agent(incus, name, self.log)
+        await agent.wait(self.left())
+        return agent
 
     async def drop(self, incus: Incus, name: str) -> None:
         try:

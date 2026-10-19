@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 from bencher.contract.input.runner import Runner
-from bencher.host.agent import Agent
+from bencher.contract.output.cache import Cache
 from bencher.host.image import Image
 from bencher.host.image.base import Base
 from bencher.host.incus import Incus
@@ -20,9 +20,9 @@ from bencher.host.store import Store
 class Provisioned(Image):
     kind: Literal["base", "provisioned"] = "provisioned"
 
-    def __init__(self, runner: Runner, cache: Path, base: Base, share: Share, log: Log) -> None:
+    def __init__(self, runner: Runner, cache: Path, parent: Base, share: Share, log: Log) -> None:
         super().__init__(runner, cache, log)
-        self.under = base
+        self.parent = parent
         self.share = share
 
     @cached_property
@@ -32,25 +32,19 @@ class Provisioned(Image):
             for entry in self.digest(self.share.path)
             if not entry[0].startswith("in/artifacts/")
         ]
-        seed = [self.under.key, self.kind, staged]
+        seed = [self.parent.key, self.kind, staged]
         return hashlib.sha256(json.dumps(seed).encode()).hexdigest()[:24]
 
+    def cache(self, level: Literal["L0", "L1", "L2"]) -> Cache:
+        return Cache(key=self.key, level=level, kind=self.kind, base=self.parent.resolved)
+
     async def form(self, incus: Incus, store: Store) -> None:
-        self.base = await self.under.ensure(incus, self.left())
-        self.log.say(f"image {self.alias}: provisioning from {self.under.alias}")
+        if self.parent.resolved is None:
+            await self.parent.ensure(incus, self.left())
+        self.log.say(f"image {self.alias}: provisioning from {self.parent.alias}")
         name = f"bencher-prime-{uuid.uuid4().hex[:12]}"
         try:
-            await incus.create(
-                name,
-                self.runner.type,
-                self.under.alias,
-                {},
-                {"run": self.share.device()},
-                self.left(),
-            )
-            await incus.state(name, "start", min(300, self.left()))
-            agent = Agent(incus, name, self.log)
-            await agent.wait(self.left())
+            agent = await self.parent.launch(incus, name, self.share)
             left = self.left()
             await agent.step("prime", str(int(left)), timeout=left)
             await agent.step("clean")
