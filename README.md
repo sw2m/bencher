@@ -387,9 +387,9 @@ with the environment in `/etc/bencher/env`:
 - `cache` is the runner image the run launched from (see Images): its `key`, its `kind`
   (`base` or `provisioned`), and the `level` it came from: `L2` (this machine's Incus image or
   cache tarball), `L1` (downloaded from the release) or `L0` (formed, or for `provisioned`
-  primed, by this run). A provisioned image formed by this run also carries `base`, the base
-  image's own `cache` as resolved under it. It is `null` when the run failed before an image was
-  resolved.
+  primed, by this run). A provisioned image always carries `base`, the base image's own `cache`:
+  its `key`, and its `level` when this run resolved it (to prime, or to run the runner's
+  `resolve`), else `null`. `cache` is `null` when the run failed before an image was resolved.
 - `stats.ci` is the distribution-free 95% confidence interval of the median
   (`scipy.stats.quantile_test`) as `[low, high]`, `null` when there are too few samples (under
   six) to reach 95%.

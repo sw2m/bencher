@@ -36,11 +36,11 @@ class Provisioned(Image):
         return hashlib.sha256(json.dumps(seed).encode()).hexdigest()[:24]
 
     def cache(self, level: Literal["L0", "L1", "L2"]) -> Cache:
-        return Cache(key=self.key, level=level, kind=self.kind, base=self.parent.resolved)
+        base = self.parent.resolved or Cache(key=self.parent.key, level=None)
+        return Cache(key=self.key, level=level, kind=self.kind, base=base)
 
     async def form(self, incus: Incus, store: Store) -> None:
-        if self.parent.resolved is None:
-            await self.parent.ensure(incus, self.left())
+        await self.parent.ensure(incus, self.left())
         self.log.say(f"image {self.alias}: provisioning from {self.parent.alias}")
         name = f"bencher-prime-{uuid.uuid4().hex[:12]}"
         try:

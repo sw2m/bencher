@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from importlib import resources
@@ -11,6 +12,7 @@ import yaml
 
 from bencher.contract.input.bench import Bench
 from bencher.contract.input.runner import Runner
+from bencher.host.failure import Failure
 
 
 class Share:
@@ -84,10 +86,13 @@ class Share:
 
     @property
     def resolver(self) -> bool:
-        return os.access(self.path / "runner" / "resolve", os.X_OK)
+        resolve = self.path / "runner" / "resolve"
+        if resolve.exists() and not os.access(resolve, os.X_OK):
+            raise Failure(f"the runner's {resolve.name} is not executable")
+        return resolve.exists()
 
     def resolve(self, resolved: dict[str, Any]) -> None:
-        self.data["bencher"]["resolved"] = resolved
+        self.data["bencher"]["resolved"] = json.loads(json.dumps(resolved, sort_keys=True))
         self.write()
         self.publish()
 
