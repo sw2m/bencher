@@ -23,6 +23,7 @@ class Bench(Model):
     params: dict[str, Any] = {}
     artifacts: dict[Name, str] = {}
     cache: Literal["base", "provisioned"] = "base"
+    resolved: str | None = None
 
     @classmethod
     def load(cls, root: Path, overrides: list[Override]) -> Bench:

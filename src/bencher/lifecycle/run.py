@@ -75,9 +75,6 @@ class Run:
         limit = plan.bench.limits.provision.total_seconds()
         loop = asyncio.get_running_loop()
         deadline = loop.time() + limit
-        if self.share.resolver:
-            await self.base.ensure(incus, max(1.0, deadline - loop.time()))
-            self.share.resolve(await self.base.query(incus, self.share))
         self.cache = await self.image.ensure(incus, max(1.0, deadline - loop.time()))
         count = plan.bench.limits.cpu
         cpus = Cpus(incus)
@@ -201,7 +198,7 @@ class Run:
         stage: Stage = "launch"
         try:
             stage = "stage"
-            self.share.stage(plan.root, plan.bench, plan.runner, plan.tree)
+            self.share.stage(plan.root, plan.bench, plan.runner, plan.tree, plan.resolved)
             stage = "launch"
             await self.create(incus)
             await incus.state(self.name, "start", 300)

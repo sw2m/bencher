@@ -1,3 +1,5 @@
+resolved = "resolved.json"
+
 [fixture]
 path = ".."
 runner = "runner"

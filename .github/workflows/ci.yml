@@ -30,6 +30,8 @@ jobs:
           primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-
       - run: nix flake check --no-update-lock-file -L
+      - run: nix run . -- lint ci/bench
+      - run: '! nix run . -- lint ci/bench --set resolved=expect.tsv'
 
   run:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
@@ -94,7 +96,7 @@ jobs:
           args: --set cache=provisioned
       - run: |
           [ "${{ steps.provisioned.outputs.passed }}" = true ]
-          [ "$(jq -r '.cache.kind + " " + .cache.level' '${{ steps.provisioned.outputs.report }}')" = "provisioned L2" ]
+          [ "$(jq -r '.cache.kind + " " + .cache.level + " " + (.cache.base.level // "null")' '${{ steps.provisioned.outputs.report }}')" = "provisioned L2 null" ]
 
   # The one status to mark required
   mergeable:
