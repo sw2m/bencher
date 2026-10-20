@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 from importlib import resources
 from pathlib import Path
@@ -12,7 +11,6 @@ import yaml
 
 from bencher.contract.input.bench import Bench
 from bencher.contract.input.runner import Runner
-from bencher.host.failure import Failure
 
 
 class Share:
@@ -20,14 +18,16 @@ class Share:
         self.path = path
         self.inputs = path / "in"
 
-    def stage(self, root: Path, bench: Bench, runner: Runner, tree: Path) -> None:
+    def stage(
+        self, root: Path, bench: Bench, runner: Runner, tree: Path, resolved: dict[str, Any]
+    ) -> None:
         self.remove()
         self.path.mkdir(parents=True)
         self.states()
         self.runner(tree, (root / bench.fixture.path).resolve())
         artifacts = self.artifacts(root, bench)
         self.params(bench)
-        self.pillar(bench, runner, artifacts)
+        self.pillar(bench, runner, artifacts, resolved)
         self.write()
         self.publish()
 
@@ -62,7 +62,9 @@ class Share:
     def params(self, bench: Bench) -> None:
         (self.inputs / "params.json").write_bytes(pydantic_core.to_json(bench.params) + b"\n")
 
-    def pillar(self, bench: Bench, runner: Runner, artifacts: dict[str, str]) -> None:
+    def pillar(
+        self, bench: Bench, runner: Runner, artifacts: dict[str, str], resolved: dict[str, Any]
+    ) -> None:
         seconds = bench.telemetry.interval.total_seconds()
         ready = max(60, int(3 * seconds) + 1)  # the first gather lands within 2 intervals
         self.data: dict[str, Any] = {
@@ -72,7 +74,7 @@ class Share:
                 "reporters": runner.reporters,
                 "telemetry": {"interval": f"{int(seconds * 1000)}ms", "ready": ready},
                 "phase": "run",
-                "resolved": {},
+                "resolved": json.loads(json.dumps(resolved, sort_keys=True)),
             }
         }
 
@@ -83,18 +85,6 @@ class Share:
         (pillar / "bencher.sls").write_text(yaml.safe_dump(self.data))
         resolved = self.data["bencher"]["resolved"]
         (self.inputs / "resolved.json").write_bytes(pydantic_core.to_json(resolved) + b"\n")
-
-    @property
-    def resolver(self) -> bool:
-        resolve = self.path / "runner" / "resolve"
-        if resolve.exists() and not os.access(resolve, os.X_OK):
-            raise Failure(f"the runner's {resolve.name} is not executable")
-        return resolve.exists()
-
-    def resolve(self, resolved: dict[str, Any]) -> None:
-        self.data["bencher"]["resolved"] = json.loads(json.dumps(resolved, sort_keys=True))
-        self.write()
-        self.publish()
 
     def publish(self) -> None:
         for path in [self.path, *self.path.rglob("*")]:

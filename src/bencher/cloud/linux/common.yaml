@@ -66,12 +66,6 @@ write_files:
           systemctl set-property --runtime bench.slice "AllowedCPUs=$(echo "$@" | tr ' ' ',')"
           runner run
           exec salt-call --local --retcode-passthrough --state-output=changes state.apply bencher ;;
-        resolve)
-          stage "$2"
-          cd /var/lib/bencher/runner
-          [ -x resolve ] || { echo '{}'; exit 0; }
-          set -a; . /etc/bencher/env; set +a
-          exec ./resolve ;;
         prime)
           stage "$2"
           rm -rf /var/lib/bencher/in/artifacts
@@ -81,7 +75,7 @@ write_files:
           cloud-init clean --logs
           # see https://www.freedesktop.org/software/systemd/man/latest/machine-id.html#First%20Boot%20Semantics
           exec truncate -s 0 /etc/machine-id ;;
-        *) echo "usage: bencher-agent wait|log|clean|flush|check|provision <seconds>|resolve <seconds>|prime <seconds>|run <seconds>" >&2; exit 2 ;;
+        *) echo "usage: bencher-agent wait|log|clean|flush|check|provision <seconds>|prime <seconds>|run <seconds>" >&2; exit 2 ;;
       esac
   - path: /etc/systemd/system/victoria-metrics.service.d/bencher.conf
     content: |

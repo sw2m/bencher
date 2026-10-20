@@ -37,9 +37,8 @@ them through a param the runner reads, by the runner's own convention (e.g. `[pa
 bencher run <bench dir>
   1. load       bench.toml (+ --set), locate the fixture runner, load runner.toml and expect.tsv
   2. stage      write the run share: bencher's Salt states, the runner, the consumer's inputs, pillar
-  3. launch     run the runner's `resolve`, if it has one, into the share; resolve the runner's image
-                (see Images; a provisioned image is keyed on the share), create the instance from it
-                stopped, with the run share, and start it
+  3. launch     resolve the runner's image (see Images; a provisioned image is keyed on the
+                share), create the instance from it stopped, with the run share, and start it
   4. provision  `bencher-agent provision`: copy the share, fence the CPUs, apply the runner's and
                 bencher's states
   5. execute    exec the entrypoint, fenced from telemetry; its stdout is the result
@@ -74,9 +73,8 @@ larger than the host's online CPUs fails at once. A clustered Incus is refused: 
 from the local host's topology. The lock is created once, mode `0666`, and opened without
 `O_CREAT` afterwards, since `fs.protected_regular` refuses a create-open of another user's file
 in `/tmp`; anything else at its path (a symlink, a directory, a file not every user can open)
-fails the run and names the path. Instances that form or prime an image, or run a runner's
-`resolve`, are short-lived and take no fenced CPUs, so a run is not isolated from one that is
-priming on the same host.
+fails the run and names the path. Instances that form or prime an image are short-lived and
+take no fenced CPUs, so a run is not isolated from one that is priming on the same host.
 
 The guest records the CPU set it fenced, and `bencher-agent check` (run before the entrypoint
 and again after the collector stops) fails the run if that set changed. That catches the fence
@@ -120,7 +118,7 @@ signed repositories, and Python 3 from the distro, at pinned versions, write the
 (`bencher.slice` for telemetry, `bench.slice` for the benchmark), write the systemd drop-ins that
 put both telemetry services in `bencher.slice`, and disable the telemetry services, so the
 formed image boots without recording. Nothing in the layers depends on a run: everything per run
-is `bencher-agent provision`, and everything per provisioned image is `resolve` and `prime`.
+is `bencher-agent provision`, and everything per provisioned image is `prime`.
 
 ### The guest agent
 
@@ -166,14 +164,17 @@ tarball to re-form.
 | `cache` | L2 holds | Key | A hit skips |
 | --- | --- | --- | --- |
 | `"base"` (default) | the base image above | the base key | the L1 download |
-| `"provisioned"` | the base after the runner's states: its packages and builds | the base key, the kind, and a digest of the staged run share without `in/artifacts` (bencher's states, the runner tree, the pillar with `bencher:resolved`, `params.json`) | provisioning's builds |
+| `"provisioned"` | the base after the runner's states: its packages and builds | the base key, the kind, and a digest of the staged run share without `in/artifacts` (bencher's states, the runner tree, the pillar with `bencher:resolved`, `params.json`, `resolved.json`) | provisioning's builds |
 
-**Floating inputs are resolved before the lookup.** A runner that tracks something floating (a
-latest release) ships an executable `resolve`. Whatever `cache` says, bencher then resolves the
-base first, runs `bencher-agent resolve` in a short-lived instance from it, and puts the JSON
-object it prints into the pillar as `bencher:resolved` (and `in/resolved.json`), so the state
-builds exactly what was resolved and a provisioned key carries it: a new upstream release misses.
-A runner without `resolve` has nothing floating to key, or keeps it out of the image.
+**The consumer resolves floating inputs.** A key is a digest of files bencher holds, so it can't
+see what a runner's states would fetch as "latest". A consumer whose runner tracks something
+floating names a file in `bench.toml`, `resolved = "resolved.json"`: one JSON object saying what
+those inputs are (exact versions), in whatever shape the runner reads. bencher stages it as
+`bencher:resolved` in the pillar and as `in/resolved.json`, so the runner's states build exactly
+that and the provisioned key carries it. How the file is made, and so how fresh the cache is, is
+the consumer's call: committed and bumped by hand or by a bot, or written by a step before
+`bencher run` (a fixture may ship a helper for it). A new version in the file misses; the same
+file hits. bencher runs nothing to compute a key.
 
 A provisioned miss then launches a forming instance from the base with the run share mounted, runs
 `bencher-agent prime`, then `clean`, and publishes and exports it as the base is. `prime` applies
@@ -218,7 +219,7 @@ reach the states as pillar under `bencher`:
 | `bencher:reporters` | `reporters` in `runner.toml` |
 | `bencher:telemetry:interval` | `[telemetry] interval` in `bench.toml` |
 | `bencher:phase` | `prime` while forming a provisioned image, `run` in a run (see Images) |
-| `bencher:resolved` | what the runner's `resolve` printed; `{}` for a runner without one |
+| `bencher:resolved` | the consumer's `resolved` file (see Images), keys sorted; `{}` without one |
 
 ## Telemetry
 
@@ -260,6 +261,9 @@ milliseconds apart still sum into one point).
 ### `bench.toml` (consumer)
 
 ```toml
+cache = "provisioned"
+resolved = "resolved.json"
+
 [fixture]
 path = "../../../bench" # the consumer's checkout of sw2m/pdbd-bench
 runner = "transport"
@@ -292,9 +296,12 @@ linkup = "../../result/bin/linkup"
 - Durations are seconds, ISO 8601 (`PT30M`) or `HH:MM:SS`.
 - `cache` is what this consumer's L2 holds, `"base"` (default) or `"provisioned"` (see Images).
 - `limits.provision` bounds launching (resolving or forming the runner's image, then waiting for
-  free CPUs, and running the runner's `resolve`) and then, separately, the run's own provisioning. For `cache = "provisioned"`, the
-  launch budget also covers priming on a miss, so a first run needs room for both
-  the runner's builds and the CPU wait. `limits.run` bounds the entrypoint.
+  free CPUs) and then, separately, the run's own provisioning. For `cache = "provisioned"`, the
+  launch budget also covers priming on a miss, so a first run needs room for both the runner's
+  builds and the CPU wait. `limits.run` bounds the entrypoint.
+- `resolved` is a file holding one JSON object, handed to the runner as `bencher:resolved` and
+  `in/resolved.json` (see Images). A missing file, invalid JSON, or anything but an object fails
+  the load. Without it, both are `{}`.
 
 ### `runner.toml` (fixture)
 
@@ -305,9 +312,9 @@ reporters = ["linkup", "pppd"]
 ```
 
 A runner directory holds `runner.toml`, `salt/runner.sls` (and anything it references), the
-entrypoint, `run` on Linux, and optionally `resolve`: an executable that prints one JSON object
-naming what its floating inputs resolve to now (see Images). It runs as root in the guest, in the
-runner directory, with `/etc/bencher/env`, and must not depend on artifacts. `image` is `<remote>:<alias>` for the `images` and `ubuntu`
+entrypoint, `run` on Linux. A runner that installs something floating documents the
+`resolved.json` it reads (see Images); bencher never runs anything of the runner's outside the
+guest's provisioning and entrypoint. `image` is `<remote>:<alias>` for the `images` and `ubuntu`
 remotes, or a local alias. Images must carry cloud-init and, for VMs, incus-agent; the
 `images:` remote's `cloud` variants do.
 
@@ -388,8 +395,7 @@ with the environment in `/etc/bencher/env`:
   (`base` or `provisioned`), and the `level` it came from: `L2` (this machine's Incus image or
   cache tarball), `L1` (downloaded from the release) or `L0` (formed, or for `provisioned`
   primed, by this run). A provisioned image always carries `base`, the base image's own `cache`:
-  its `key`, and its `level` when this run resolved it (to prime, or to run the runner's
-  `resolve`), else `null`. `cache` is `null` when the run failed before an image was resolved.
+  its `key`, and its `level` when this run resolved it (to prime), else `null`. `cache` is `null` when the run failed before an image was resolved.
 - `stats.ci` is the distribution-free 95% confidence interval of the median
   (`scipy.stats.quantile_test`) as `[low, high]`, `null` when there are too few samples (under
   six) to reach 95%.

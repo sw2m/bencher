@@ -24,7 +24,7 @@
       runtime = p: with p; [ deepmerge httpx pydantic pydantic-settings pyincusd pyyaml scipy ];
       bencher = pkgs: (python pkgs).pkgs.buildPythonApplication {
         pname = "bencher";
-        version = "0.3.0";
+        version = "0.4.0";
         pyproject = true;
         src = self;
         build-system = [ (python pkgs).pkgs.setuptools ];
