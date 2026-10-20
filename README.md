@@ -530,8 +530,10 @@ after:
 `restore` creates `~/.cache/bencher/images`, computes the same per-bench prefix and restore keys as
 the action, restores, and warns on a hit. Its outputs are `key` (what `save` saves under), `hit`,
 and `matched` (the restored key, or empty). `save` keeps only the images the report names and
-saves only when they differ from what was restored; its output is `changed`. A missing or
-unreadable report keeps every image, and the directory is saved if it changed. The action and
+saves only when they differ from what was restored, or when nothing was restored in this job; its
+output is `changed`. It reads the report with `jq` (preinstalled on GitHub's runners) and fails
+without it. A missing or unreadable report, or one whose keys aren't bencher's hex keys, keeps
+every image. The action and
 this sub-action share one script, `cache/images`, so they cannot drift. Use the same `<ref>` as
 the bencher you run, since the image keys depend on bencher's version.
 
@@ -616,10 +618,12 @@ import the tarball the first one cached and report `L2`. It then does the same w
 `L0`, with a base at `L2`), and after its Incus image is deleted the second must import its
 tarball and report `provisioned` at `L2`.
 
-CI's `cache` job does the same through `cache/` around `ci/e2e.sh`, outside the action. It wipes
-whatever its first `restore` found, so the first run forms its image (`L0`) and its `save` saves
-it. With the Incus image and the local tarballs deleted, the second `restore` must match that
-save, the second run must import it (`L2`), and its `save` must not save again.
+CI's `cache` job does the same through `cache/` around `ci/e2e.sh`, outside the action. Its
+`bench` is scoped to the run and attempt, so no other job or re-run writes its key prefix, and
+`BENCHER_L1` points nowhere, so neither run can fetch L1. It wipes whatever its first `restore`
+found, so the first run forms its image (`L0`) and its `save` saves it. With the Incus image and
+the local tarballs deleted, the second `restore` must match that save, the second run must import
+it (`L2`), and its `save` must not save again.
 
 `mergeable` is the one required status check on `main`; it needs `check`, `run`, `action` and
 `cache`.

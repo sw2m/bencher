@@ -113,9 +113,11 @@ jobs:
         uses: ./cache
         with:
           mode: restore
-          bench: ci/bench
-      - run: rm -rf ~/.cache/bencher/images/* # a cold run, whatever the restore found
-      - run: sg incus-admin -c "ci/e2e.sh runner $RUNNER_TEMP/cold.json"
+          bench: ci/cache/${{ github.run_id }}/${{ github.run_attempt }} # a key prefix only this job, this attempt, writes
+      - run: | # a first save: nothing local, and nothing restored to compare against
+          rm -rf ~/.cache/bencher/images
+          rm -f "$RUNNER_TEMP/${{ steps.before.outputs.key }}.restored"
+      - run: sg incus-admin -c "BENCHER_L1='http://127.0.0.1:9/{file}' ci/e2e.sh runner $RUNNER_TEMP/cold.json" # no L1 either
       - run: '[ "$(jq -r .cache.level "$RUNNER_TEMP/cold.json")" = L0 ]'
       - id: cold
         uses: ./cache
@@ -126,16 +128,16 @@ jobs:
       - run: '[ "${{ steps.cold.outputs.changed }}" = true ]'
       - run: |
           sg incus-admin -c "incus image delete bencher/$(jq -r .cache.key "$RUNNER_TEMP/cold.json")"
-          rm -rf ~/.cache/bencher/images/*
+          rm -rf ~/.cache/bencher/images
       - id: after
         uses: ./cache
         with:
           mode: restore
-          bench: ci/bench
+          bench: ci/cache/${{ github.run_id }}/${{ github.run_attempt }}
       - run: |
           [ "${{ steps.after.outputs.hit }}" = true ]
           [ "${{ steps.after.outputs.matched }}" = "${{ steps.before.outputs.key }}" ]
-      - run: sg incus-admin -c "ci/e2e.sh runner $RUNNER_TEMP/warm.json"
+      - run: sg incus-admin -c "BENCHER_L1='http://127.0.0.1:9/{file}' ci/e2e.sh runner $RUNNER_TEMP/warm.json"
       - run: '[ "$(jq -r .cache.level "$RUNNER_TEMP/warm.json")" = L2 ]'
       - id: warm
         uses: ./cache

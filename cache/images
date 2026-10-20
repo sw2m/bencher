@@ -2,14 +2,20 @@
 # see README "Caching around your own run"
 set -eu
 images=$HOME/.cache/bencher/images
+usage() {
+  echo "usage: images prefix <bench> | mark <key> <matched> | prune <report> <key>" >&2
+  exit 2
+}
 case "${1:-}" in
   prefix)
+    [ "$#" -eq 2 ] || usage
     mkdir -p "$images"
     bench=$(printf '%s' "$2" | sha256sum | cut -c1-16)
     echo "prefix=bencher-images-$RUNNER_OS-$bench-" >> "$GITHUB_OUTPUT"
     echo "key=bencher-images-$RUNNER_OS-$bench-$(cat /proc/sys/kernel/random/uuid)" >> "$GITHUB_OUTPUT"
     ;;
   mark)
+    [ "$#" -eq 3 ] || usage
     mkdir -p "$images"
     ls "$images" > "$RUNNER_TEMP/$2.restored"
     if [ -n "$3" ]; then
@@ -21,8 +27,15 @@ case "${1:-}" in
     echo "matched=$3" >> "$GITHUB_OUTPUT"
     ;;
   prune)
+    [ "$#" -eq 3 ] || usage
+    if [ -e "$2" ] && ! command -v jq >/dev/null; then
+      echo "bencher cache: reading the report needs jq" >&2
+      exit 1
+    fi
     key=$(jq -r '.cache.key // ""' "$2" 2>/dev/null || true)
     base=$(jq -r '.cache.base.key // ""' "$2" 2>/dev/null || true)
+    case "$key" in *[!0-9a-f]*) key= ;; esac
+    case "$base" in *[!0-9a-f]*) base= ;; esac
     mkdir -p "$images"
     cd "$images"
     if [ -n "$key" ]; then
@@ -36,7 +49,6 @@ case "${1:-}" in
     fi
     ;;
   *)
-    echo "usage: images prefix <bench> | mark <key> <matched> | prune <report> <key>" >&2
-    exit 2
+    usage
     ;;
 esac
