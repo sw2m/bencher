@@ -30,5 +30,5 @@ class Plan:
         for name, path in bench.artifacts.items():
             if not (root / path).exists():
                 raise Halt(f"artifact {name}: {root / path} does not exist")
-        resolved = Resolved.load(root / bench.resolved) if bench.resolved else {}
+        resolved = Resolved.load(root / bench.resolved) if bench.resolved is not None else {}
         return cls(root, bench, runner, tree, Rules.load(root), overrides, resolved)

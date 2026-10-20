@@ -314,7 +314,10 @@ reporters = ["linkup", "pppd"]
 A runner directory holds `runner.toml`, `salt/runner.sls` (and anything it references), the
 entrypoint, `run` on Linux. A runner that installs something floating documents the
 `resolved.json` it reads (see Images); bencher never runs anything of the runner's outside the
-guest's provisioning and entrypoint. `image` is `<remote>:<alias>` for the `images` and `ubuntu`
+guest's provisioning and entrypoint. Before 0.4.0 bencher ran a runner's `resolve` in a
+short-lived instance; it no longer does, and a file by that name is just part of the tree (a
+fixture may keep one as a helper for its consumers), so a consumer that relied on it names its
+own `resolved` file instead. `image` is `<remote>:<alias>` for the `images` and `ubuntu`
 remotes, or a local alias. Images must carry cloud-init and, for VMs, incus-agent; the
 `images:` remote's `cloud` variants do.
 
@@ -541,7 +544,7 @@ package's `__init__.py` only re-exports.
 
 ### End-to-end
 
-`ci/` holds a consumer (`ci/bench/`: `bench.toml`, `expect.tsv`, an artifact) and a fixture runner
+`ci/` holds a consumer (`ci/bench/`: `bench.toml`, `expect.tsv`, `resolved.json`, an artifact) and a fixture runner
 in two shapes (`ci/runner/` as a container, `ci/vm/` as a VM, sharing files by symlink). CI's
 `run` job does a full run of each on a GitHub runner:
 

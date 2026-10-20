@@ -36,7 +36,7 @@ class Provisioned(Image):
         return hashlib.sha256(json.dumps(seed).encode()).hexdigest()[:24]
 
     def cache(self, level: Literal["L0", "L1", "L2"]) -> Cache:
-        base = self.parent.resolved or Cache(key=self.parent.key, level=None)
+        base = self.parent.found or Cache(key=self.parent.key, level=None)
         return Cache(key=self.key, level=level, kind=self.kind, base=base)
 
     async def form(self, incus: Incus, store: Store) -> None:

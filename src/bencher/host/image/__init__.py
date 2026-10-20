@@ -26,7 +26,7 @@ class Image:
         self.images = cache / "images"
         self.log = log
         self.deadline = 0.0
-        self.resolved: Cache | None = None
+        self.found: Cache | None = None
 
     @staticmethod
     def digest(node: Traversable, prefix: str = "") -> list[tuple[str, str]]:
@@ -86,14 +86,12 @@ class Image:
         return Cache(key=self.key, level=level, kind=self.kind)
 
     async def ensure(self, incus: Incus, timeout: float) -> Cache:
-        if self.resolved is not None:
-            return self.resolved
         self.deadline = time.monotonic() + timeout
         self.images.mkdir(parents=True, exist_ok=True)
         with (self.images / f"{self.key}.lock").open("w") as lock:
             await asyncio.to_thread(fcntl.flock, lock, fcntl.LOCK_EX)
-            self.resolved = await self.resolve(incus, Store(incus))
-            return self.resolved
+            self.found = await self.resolve(incus, Store(incus))
+            return self.found
 
     async def fetch(self) -> bool:
         return False
