@@ -98,17 +98,68 @@ jobs:
           [ "${{ steps.provisioned.outputs.passed }}" = true ]
           [ "$(jq -r '.cache.kind + " " + .cache.level + " " + (.cache.base.level // "null")' '${{ steps.provisioned.outputs.report }}')" = "provisioned L2 null" ]
 
+  cache:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-run-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+          restore-prefixes-first-match: nix-run-${{ runner.os }}-
+      - run: sudo ci/setup.sh "$USER"
+      - id: before
+        uses: ./cache
+        with:
+          mode: restore
+          bench: ci/cache/${{ github.run_id }}/${{ github.run_attempt }} # a key prefix only this job, this attempt, writes
+      - run: | # a first save: nothing local, and nothing restored to compare against
+          rm -rf ~/.cache/bencher/images
+          rm -f "$RUNNER_TEMP/${{ steps.before.outputs.key }}.restored"
+      - run: sg incus-admin -c "BENCHER_L1='http://127.0.0.1:9/{file}' ci/e2e.sh runner $RUNNER_TEMP/cold.json" # no L1 either
+      - run: '[ "$(jq -r .cache.level "$RUNNER_TEMP/cold.json")" = L0 ]'
+      - id: cold
+        uses: ./cache
+        with:
+          mode: save
+          report: ${{ runner.temp }}/cold.json
+          key: ${{ steps.before.outputs.key }}
+      - run: '[ "${{ steps.cold.outputs.changed }}" = true ]'
+      - run: |
+          sg incus-admin -c "incus image delete bencher/$(jq -r .cache.key "$RUNNER_TEMP/cold.json")"
+          rm -rf ~/.cache/bencher/images
+      - id: after
+        uses: ./cache
+        with:
+          mode: restore
+          bench: ci/cache/${{ github.run_id }}/${{ github.run_attempt }}
+      - run: |
+          [ "${{ steps.after.outputs.hit }}" = true ]
+          [ "${{ steps.after.outputs.matched }}" = "${{ steps.before.outputs.key }}" ]
+      - run: sg incus-admin -c "BENCHER_L1='http://127.0.0.1:9/{file}' ci/e2e.sh runner $RUNNER_TEMP/warm.json"
+      - run: '[ "$(jq -r .cache.level "$RUNNER_TEMP/warm.json")" = L2 ]'
+      - id: warm
+        uses: ./cache
+        with:
+          mode: save
+          report: ${{ runner.temp }}/warm.json
+          key: ${{ steps.after.outputs.key }}
+      - run: '[ "${{ steps.warm.outputs.changed }}" = false ]'
+
   # The one status to mark required
   mergeable:
     needs:
       - check
       - run
       - action
+      - cache
     if: always() # report on drafts too, so the status is never stuck "expected"
     runs-on: ubuntu-latest
     steps:
       - run: |
-          echo "check=${{ needs.check.result }} run=${{ needs.run.result }} action=${{ needs.action.result }}"
+          echo "check=${{ needs.check.result }} run=${{ needs.run.result }} action=${{ needs.action.result }} cache=${{ needs.cache.result }}"
           [ "${{ needs.check.result }}" = success ]
           [ "${{ needs.run.result }}" = success ]
           [ "${{ needs.action.result }}" = success ]
+          [ "${{ needs.cache.result }}" = success ]

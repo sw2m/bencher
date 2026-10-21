@@ -1,0 +1,83 @@
+name: bencher cache
+description: Restore and save bencher's runner images through the Actions cache, around a bencher run you make yourself
+author: sw2m
+branding:
+  icon: archive
+  color: purple
+
+inputs:
+  mode:
+    description: restore (before the run) or save (after it)
+    required: true
+  bench:
+    description: restore - the consumer directory holding bench.toml; it scopes the cache key
+    default: ""
+  report:
+    description: save - the path of the run's report JSON, which names the images to keep
+    default: ""
+  key:
+    description: save - the key output of this action's restore step
+    default: ""
+
+outputs:
+  key:
+    description: restore - the key save saves under
+    value: ${{ steps.setup.outputs.key }}
+  hit:
+    description: restore - whether anything was restored
+    value: ${{ steps.mark.outputs.hit }}
+  matched:
+    description: restore - the key that was restored, or empty
+    value: ${{ steps.mark.outputs.matched }}
+  changed:
+    description: save - whether the images changed from what was restored, and so were saved
+    value: ${{ steps.prune.outputs.changed }}
+
+runs:
+  using: composite
+  steps:
+    - id: setup
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        BENCH: ${{ inputs.bench }}
+        REPORT: ${{ inputs.report }}
+        KEY: ${{ inputs.key }}
+      run: |
+        case "$MODE" in
+          restore)
+            [ -n "$BENCH" ] || { echo "bencher cache: restore needs bench" >&2; exit 2; }
+            "$GITHUB_ACTION_PATH/images" prefix "$BENCH" ;;
+          save)
+            [ -n "$REPORT" ] && [ -n "$KEY" ] || { echo "bencher cache: save needs report and key" >&2; exit 2; } ;;
+          *)
+            echo "bencher cache: mode is restore or save, not '$MODE'" >&2; exit 2 ;;
+        esac
+    - id: restore
+      if: inputs.mode == 'restore'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/bencher/images
+        key: ${{ steps.setup.outputs.key }}
+        restore-keys: |
+          ${{ steps.setup.outputs.prefix }}
+          bencher-images-${{ runner.os }}-
+    - id: mark
+      if: inputs.mode == 'restore'
+      shell: bash
+      env:
+        KEY: ${{ steps.setup.outputs.key }}
+        MATCHED: ${{ steps.restore.outputs.cache-matched-key }}
+      run: '"$GITHUB_ACTION_PATH/images" mark "$KEY" "$MATCHED"'
+    - id: prune
+      if: inputs.mode == 'save'
+      shell: bash
+      env:
+        REPORT: ${{ inputs.report }}
+        KEY: ${{ inputs.key }}
+      run: '"$GITHUB_ACTION_PATH/images" prune "$REPORT" "$KEY"'
+    - if: inputs.mode == 'save' && steps.prune.outputs.changed == 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/bencher/images
+        key: ${{ inputs.key }}

@@ -503,6 +503,39 @@ path), `passed`, `cache`, the report's cache level (`L0`, `L1` or `L2`), and `ki
 `provisioned`); the step fails when the report does. `args` is split on whitespace and passed as arguments, never evaluated by a shell,
 so it can't carry a value with spaces. `cache: "false"` skips the Actions cache, so on a runner
 without the Incus image already present the run resolves L1 or L0. bencher itself is pinned by the action's ref.
+On an Actions-cache hit the action emits a warning naming the restored key, since a hit races
+whatever that image was provisioned with.
+
+### Caching around your own run
+
+A consumer that runs `bencher run` itself (from a hook or script, so local runs and CI take one
+path) gets the action's image caching from `sw2m/bencher/cache`, one step before the run and one
+after:
+
+```yaml
+- id: images
+  uses: sw2m/bencher/cache@<ref>
+  with:
+    mode: restore
+    bench: crates/mux/bench
+- run: ./bench.sh # runs bencher run crates/mux/bench --out crates/mux/bench/report.json
+- if: always()
+  uses: sw2m/bencher/cache@<ref>
+  with:
+    mode: save
+    report: crates/mux/bench/report.json
+    key: ${{ steps.images.outputs.key }}
+```
+
+`restore` creates `~/.cache/bencher/images`, computes the same per-bench prefix and restore keys as
+the action, restores, and warns on a hit. Its outputs are `key` (what `save` saves under), `hit`,
+and `matched` (the restored key, or empty). `save` keeps only the images the report names and
+saves only when they differ from what was restored, or when nothing was restored in this job; its
+output is `changed`. It reads the report with `jq` (preinstalled on GitHub's runners) and fails
+without it. A missing or unreadable report, or one whose keys aren't bencher's hex keys, keeps
+every image. The action and
+this sub-action share one script, `cache/images`, so they cannot drift. Use the same `<ref>` as
+the bencher you run, since the image keys depend on bencher's version.
 
 ### Operator settings
 
@@ -585,7 +618,15 @@ import the tarball the first one cached and report `L2`. It then does the same w
 `L0`, with a base at `L2`), and after its Incus image is deleted the second must import its
 tarball and report `provisioned` at `L2`.
 
-`mergeable` is the one required status check on `main`; it needs `check`, `run` and `action`.
+CI's `cache` job does the same through `cache/` around `ci/e2e.sh`, outside the action. Its
+`bench` is scoped to the run and attempt, so no other job or re-run writes its key prefix, and
+`BENCHER_L1` points nowhere, so neither run can fetch L1. It wipes whatever its first `restore`
+found, so the first run forms its image (`L0`) and its `save` saves it. With the Incus image and
+the local tarballs deleted, the second `restore` must match that save, the second run must import
+it (`L2`), and its `save` must not save again.
+
+`mergeable` is the one required status check on `main`; it needs `check`, `run`, `action` and
+`cache`.
 Open PRs as drafts; CI runs when a PR is marked ready, or on demand with `workflow_dispatch`; a
 newer push cancels the PR's running CI. Draft and ready runs are cancelled separately, so the
 draft-skipping run a push makes can't cancel the ready run that marking the PR ready makes.
